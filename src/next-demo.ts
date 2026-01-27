@@ -415,6 +415,142 @@ export default function ApiDemo() {
 `
   );
 
+  // Create external API demo page
+  vfs.writeFileSync(
+    '/pages/external-api.jsx',
+    `import React, { useState } from 'react';
+import Link from 'next/link';
+
+export default function ExternalApiDemo() {
+  const [user, setUser] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+
+  const fetchGitHubUser = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      // Uses proxyFetch from window - will use proxy if configured
+      const response = await window.__proxyFetch('https://api.github.com/users/octocat');
+      if (!response.ok) {
+        throw new Error('Failed to fetch: ' + response.status);
+      }
+      const data = await response.json();
+      setUser(data);
+    } catch (err) {
+      setError(err.message);
+    }
+    setLoading(false);
+  };
+
+  return (
+    <div>
+      <nav>
+        <ul>
+          <li><Link href="/">Home</Link></li>
+          <li><Link href="/about">About</Link></li>
+          <li><Link href="/api-demo">API Demo</Link></li>
+          <li><Link href="/external-api">External API</Link></li>
+        </ul>
+      </nav>
+
+      <div className="container">
+        <h1>External API Demo</h1>
+
+        <div className="p-6 bg-gradient-to-r from-green-400 to-blue-500 rounded-xl text-white mb-6">
+          <h2 className="text-xl font-bold mb-2">CORS Proxy Demo</h2>
+          <p className="opacity-90">
+            This page demonstrates fetching from external APIs.
+            Configure a CORS proxy in the editor panel if you encounter CORS errors.
+          </p>
+        </div>
+
+        <div className="card">
+          <h3>GitHub User API</h3>
+          <p style={{ marginBottom: '1rem', color: '#666' }}>
+            Fetches user data from the GitHub API. If CORS errors occur,
+            set a proxy URL like <code>https://corsproxy.io/?</code> in the settings.
+          </p>
+
+          <button
+            onClick={fetchGitHubUser}
+            disabled={loading}
+            style={{ marginBottom: '1rem' }}
+          >
+            {loading ? 'Loading...' : 'Fetch GitHub User (octocat)'}
+          </button>
+
+          {error && (
+            <div style={{
+              background: '#fee2e2',
+              color: '#dc2626',
+              padding: '1rem',
+              borderRadius: '8px',
+              marginBottom: '1rem'
+            }}>
+              <strong>Error:</strong> {error}
+              <p style={{ marginTop: '0.5rem', fontSize: '0.9rem' }}>
+                Try setting a CORS proxy in the editor panel.
+              </p>
+            </div>
+          )}
+
+          {user && (
+            <div style={{
+              background: '#f3f4f6',
+              padding: '1.5rem',
+              borderRadius: '12px',
+              display: 'flex',
+              gap: '1rem',
+              alignItems: 'flex-start'
+            }}>
+              <img
+                src={user.avatar_url}
+                alt={user.login}
+                style={{ width: '80px', height: '80px', borderRadius: '50%' }}
+              />
+              <div>
+                <h4 style={{ margin: 0, fontSize: '1.25rem' }}>{user.name || user.login}</h4>
+                <p style={{ color: '#666', margin: '0.25rem 0' }}>@{user.login}</p>
+                {user.bio && <p style={{ margin: '0.5rem 0' }}>{user.bio}</p>}
+                <p style={{ fontSize: '0.875rem', color: '#888' }}>
+                  Followers: {user.followers} | Public Repos: {user.public_repos}
+                </p>
+              </div>
+            </div>
+          )}
+        </div>
+
+        <div className="card">
+          <h3>How it works</h3>
+          <p>
+            External API calls from the browser may be blocked by CORS if the server
+            doesn't allow your origin. A CORS proxy forwards your request through a
+            server that adds the appropriate headers.
+          </p>
+          <pre style={{
+            background: '#1e1e1e',
+            color: '#d4d4d4',
+            padding: '1rem',
+            borderRadius: '8px',
+            overflow: 'auto',
+            fontSize: '0.875rem'
+          }}>
+{String.raw\`// Without proxy (may fail with CORS error)
+fetch('https://api.github.com/users/octocat')
+
+// With proxy configured
+setCorsProxy('https://corsproxy.io/?');
+proxyFetch('https://api.github.com/users/octocat')\`}
+          </pre>
+        </div>
+      </div>
+    </div>
+  );
+}
+`
+  );
+
   // Create API routes
   vfs.writeFileSync(
     '/pages/api/hello.js',

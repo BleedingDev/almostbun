@@ -322,6 +322,8 @@
       .router-toggle:not(.active) { background: #333 !important; }
       #install-btn:hover:not(:disabled) { background: #16a34a !important; }
       #install-btn:disabled { background: #333 !important; cursor: wait; }
+      #set-proxy-btn:hover { background: #4f46e5 !important; }
+      #clear-proxy-btn:hover { background: #666 !important; }
     </style>
 
     <div class="hmr-indicator" id="hmr-indicator">HMR Update!</div>
@@ -346,7 +348,7 @@
         </div>
 
         <!-- Package Installation Section -->
-        <div id="package-install-section" style="margin-bottom: 12px; padding: 10px; background: #252525; border-radius: 8px; border: 1px solid #333;">
+        <div id="package-install-section" style="margin-bottom: 8px; padding: 10px; background: #252525; border-radius: 8px; border: 1px solid #333;">
           <div style="display: flex; gap: 8px; align-items: center; margin-bottom: 8px;">
             <input
               type="text"
@@ -360,6 +362,27 @@
           </div>
           <div id="installed-packages" style="font-size: 11px; color: #888;">
             <span style="color: #666;">Installed:</span> <span id="installed-list">react, react-dom</span>
+          </div>
+        </div>
+
+        <!-- CORS Proxy Configuration -->
+        <div id="proxy-section" style="margin-bottom: 12px; padding: 10px; background: #252525; border-radius: 8px; border: 1px solid #333;">
+          <div style="display: flex; gap: 8px; align-items: center;">
+            <input
+              type="text"
+              id="proxy-input"
+              placeholder="CORS Proxy URL (e.g., https://corsproxy.io/?)"
+              style="flex: 1; padding: 8px 10px; background: #111; border: 1px solid #444; border-radius: 6px; color: #eee; font-size: 13px;"
+            />
+            <button id="set-proxy-btn" style="padding: 8px 12px; background: #6366f1; white-space: nowrap;">
+              Set
+            </button>
+            <button id="clear-proxy-btn" style="padding: 8px 12px; background: #555; white-space: nowrap;">
+              Clear
+            </button>
+          </div>
+          <div style="font-size: 11px; color: #888; margin-top: 6px;">
+            <span style="color: #666;">Proxy:</span> <span id="proxy-status">Not configured (direct fetch)</span>
           </div>
         </div>
 
@@ -406,6 +429,12 @@
 
     <script type="module">
       import { initNextDemo, initNextAppRouterDemo, startNextDevServer, VirtualFS, Runtime, PackageManager } from './src/next-demo.ts';
+      import { setCorsProxy, getCorsProxy, proxyFetch } from './src/cors-proxy.ts';
+
+      // Expose proxyFetch globally for demo pages to use
+      window.__proxyFetch = proxyFetch;
+      window.__setCorsProxy = setCorsProxy;
+      window.__getCorsProxy = getCorsProxy;
 
       const outputEl = document.getElementById('output');
       const editorEl = document.getElementById('editor');
@@ -426,6 +455,10 @@
       const packageInput = document.getElementById('package-input');
       const installBtn = document.getElementById('install-btn');
       const installedList = document.getElementById('installed-list');
+      const proxyInput = document.getElementById('proxy-input');
+      const setProxyBtn = document.getElementById('set-proxy-btn');
+      const clearProxyBtn = document.getElementById('clear-proxy-btn');
+      const proxyStatus = document.getElementById('proxy-status');
 
       let vfs = null;
       let runtime = null;
@@ -443,6 +476,7 @@
         { file: '/pages/about.jsx', label: 'about.jsx' },
         { file: '/pages/users/[id].jsx', label: '[id].jsx' },
         { file: '/pages/typescript/index.tsx', label: '📘 typescript.tsx' },
+        { file: '/pages/external-api.jsx', label: '🌐 external-api.jsx' },
         { file: '/pages/api/hello.js', label: 'api/hello.js' },
         { file: '/styles/globals.css', label: 'globals.css' },
       ];
@@ -938,6 +972,45 @@ export default function ${jsName.charAt(0).toUpperCase() + jsName.slice(1)}Demo(
           if (packageSpec) {
             installPackage(packageSpec);
             packageInput.value = '';
+          }
+        }
+      });
+
+      // CORS Proxy configuration
+      function updateProxyStatus() {
+        const proxy = getCorsProxy();
+        if (proxy) {
+          proxyStatus.textContent = proxy;
+          proxyStatus.style.color = '#22c55e';
+        } else {
+          proxyStatus.textContent = 'Not configured (direct fetch)';
+          proxyStatus.style.color = '#888';
+        }
+      }
+
+      setProxyBtn.addEventListener('click', () => {
+        const proxyUrl = proxyInput.value.trim();
+        if (proxyUrl) {
+          setCorsProxy(proxyUrl);
+          updateProxyStatus();
+          log(`CORS proxy set: ${proxyUrl}`, 'hmr');
+        }
+      });
+
+      clearProxyBtn.addEventListener('click', () => {
+        setCorsProxy(null);
+        proxyInput.value = '';
+        updateProxyStatus();
+        log('CORS proxy cleared', 'hmr');
+      });
+
+      proxyInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+          const proxyUrl = proxyInput.value.trim();
+          if (proxyUrl) {
+            setCorsProxy(proxyUrl);
+            updateProxyStatus();
+            log(`CORS proxy set: ${proxyUrl}`, 'hmr');
           }
         }
       });
