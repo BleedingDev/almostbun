@@ -401,10 +401,10 @@ h1 {
       expect(response.statusCode).toBe(200);
       const body = response.body.toString();
 
-      // Should contain the HMR client script
-      expect(body).toContain('BroadcastChannel');
+      // Should contain the HMR client script (uses postMessage for sandboxed iframes)
       expect(body).toContain('vite-hmr');
       expect(body).toContain('[HMR] Client ready with React Refresh support');
+      expect(body).toContain('postMessage');
     });
 
     it('should inject script before </head>', async () => {
@@ -412,7 +412,7 @@ h1 {
       const body = response.body.toString();
 
       // HMR script should be before </head>
-      const hmrIndex = body.indexOf('BroadcastChannel');
+      const hmrIndex = body.indexOf('vite-hmr');
       const headCloseIndex = body.indexOf('</head>');
 
       expect(hmrIndex).toBeLessThan(headCloseIndex);

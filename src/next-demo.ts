@@ -4,6 +4,8 @@
 
 import { VirtualFS } from './virtual-fs';
 import { Runtime } from './runtime';
+import { createRuntime } from './create-runtime';
+import type { IRuntime } from './runtime-interface';
 import { NextDevServer } from './frameworks/next-dev-server';
 import { getServerBridge } from './server-bridge';
 import { Buffer } from './shims/stream';
@@ -1563,8 +1565,11 @@ export default function TypeScriptAppRouterDemo(): JSX.Element {
  * Initialize the Next.js demo
  */
 export async function initNextDemo(
-  outputElement: HTMLElement
-): Promise<{ vfs: VirtualFS; runtime: Runtime }> {
+  outputElement: HTMLElement,
+  options: { useWorker?: boolean } = {}
+): Promise<{ vfs: VirtualFS; runtime: IRuntime }> {
+  const { useWorker = false } = options;
+
   const log = (message: string) => {
     const line = document.createElement('div');
     line.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
@@ -1578,8 +1583,9 @@ export async function initNextDemo(
   log('Creating Next.js project structure...');
   createNextProject(vfs);
 
-  log('Initializing runtime...');
-  const runtime = new Runtime(vfs, {
+  log(`Initializing runtime (${useWorker ? 'Web Worker mode' : 'main thread'})...`);
+  const runtime = await createRuntime(vfs, {
+    useWorker,
     cwd: '/',
     env: {
       NODE_ENV: 'development',
@@ -1589,6 +1595,10 @@ export async function initNextDemo(
       log(`${prefix} ${args.map((a) => String(a)).join(' ')}`);
     },
   });
+
+  if (useWorker) {
+    log('Runtime is running in a Web Worker for better UI responsiveness');
+  }
 
   log('Setting up file watcher...');
   vfs.watch('/pages', { recursive: true }, (eventType, filename) => {
@@ -1719,8 +1729,11 @@ function listFiles(
  * Initialize the Next.js App Router demo
  */
 export async function initNextAppRouterDemo(
-  outputElement: HTMLElement
-): Promise<{ vfs: VirtualFS; runtime: Runtime }> {
+  outputElement: HTMLElement,
+  options: { useWorker?: boolean } = {}
+): Promise<{ vfs: VirtualFS; runtime: IRuntime }> {
+  const { useWorker = false } = options;
+
   const log = (message: string) => {
     const line = document.createElement('div');
     line.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
@@ -1734,8 +1747,9 @@ export async function initNextAppRouterDemo(
   log('Creating Next.js App Router project structure...');
   createNextAppRouterProject(vfs);
 
-  log('Initializing runtime...');
-  const runtime = new Runtime(vfs, {
+  log(`Initializing runtime (${useWorker ? 'Web Worker mode' : 'main thread'})...`);
+  const runtime = await createRuntime(vfs, {
+    useWorker,
     cwd: '/',
     env: {
       NODE_ENV: 'development',
@@ -1745,6 +1759,10 @@ export async function initNextAppRouterDemo(
       log(`${prefix} ${args.map((a) => String(a)).join(' ')}`);
     },
   });
+
+  if (useWorker) {
+    log('Runtime is running in a Web Worker for better UI responsiveness');
+  }
 
   log('Setting up file watcher...');
   vfs.watch('/app', { recursive: true }, (eventType, filename) => {
@@ -1760,5 +1778,5 @@ export async function initNextAppRouterDemo(
 }
 
 // Export for use in the demo page
-export { VirtualFS, Runtime, NextDevServer, PackageManager };
-export type { InstallOptions, InstallResult };
+export { VirtualFS, Runtime, NextDevServer, PackageManager, createRuntime };
+export type { InstallOptions, InstallResult, IRuntime };

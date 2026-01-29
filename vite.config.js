@@ -6,6 +6,15 @@ import topLevelAwait from 'vite-plugin-top-level-await';
 const isTest = process.env.VITEST === 'true';
 
 export default defineConfig({
+  test: {
+    // Exclude e2e tests - they should be run with `npm run test:e2e`
+    exclude: [
+      '**/node_modules/**',
+      '**/dist/**',
+      '**/e2e/**',
+      '**/examples/**/e2e/**',
+    ],
+  },
   plugins: isTest ? [] : [
     wasm(),
     topLevelAwait(),

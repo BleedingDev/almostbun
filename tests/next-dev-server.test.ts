@@ -290,7 +290,7 @@ export default function handler(req, res) {
       const response = await server.handleRequest('GET', '/', {});
       const html = response.body.toString();
 
-      expect(html).toContain('BroadcastChannel');
+      expect(html).toContain('postMessage');
       expect(html).toContain('next-hmr');
       expect(html).toContain('__vite_hot_context__');
     });

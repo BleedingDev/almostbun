@@ -18,6 +18,7 @@ A lightweight, browser-native Node.js runtime environment. Run Node.js code, ins
 - **Hot Module Replacement** - React Refresh support for instant updates
 - **TypeScript Support** - First-class TypeScript/TSX transformation via esbuild-wasm
 - **Service Worker Architecture** - Intercepts requests for seamless dev experience
+- **Optional Web Worker Support** - Offload code execution to a Web Worker for improved UI responsiveness
 
 ---
 
@@ -131,7 +132,7 @@ bridge.registerServer(server, 3000);
 |---------|-----------|---------------|
 | **Bundle Size** | ~50KB | ~2MB |
 | **Startup Time** | Instant | 2-5 seconds |
-| **Execution Model** | Browser main thread | Web Worker isolates |
+| **Execution Model** | Main thread or Web Worker (configurable) | Web Worker isolates |
 | **Shell** | `just-bash` (POSIX subset) | Full Linux kernel |
 | **Native Modules** | Stubs only | Full support |
 | **Networking** | Virtual ports | Real TCP/IP |
@@ -250,6 +251,40 @@ runtime.runFile('/path/to/file.js');
 // Require a module
 const module = runtime.require('/path/to/module.js');
 ```
+
+### createRuntime (Async Runtime Factory)
+
+For advanced use cases, you can use `createRuntime` to create a runtime with optional Web Worker support:
+
+```typescript
+import { createRuntime, VirtualFS } from 'just-node';
+
+const vfs = new VirtualFS();
+
+// Main thread execution (default, backward compatible)
+const runtime = await createRuntime(vfs, { useWorker: false });
+
+// Web Worker execution (opt-in)
+const workerRuntime = await createRuntime(vfs, {
+  useWorker: true,
+  cwd: '/project',
+  env: { NODE_ENV: 'development' },
+  onConsole: (method, args) => console.log(`[${method}]`, ...args),
+});
+
+// Both modes use the same async API
+const result = await runtime.execute('module.exports = 1 + 1;');
+console.log(result.exports); // 2
+
+const fileResult = await runtime.runFile('/project/index.js');
+```
+
+**When to use Web Worker mode:**
+- Heavy computations that might block the UI
+- Long-running builds or bundling operations
+- When you need a responsive UI during code execution
+
+**Note:** Web Worker mode uses `postMessage` for communication (no SharedArrayBuffer required), so it works without special COOP/COEP headers. File system changes on the main thread are automatically synchronized to the worker.
 
 ### PackageManager
 
@@ -490,6 +525,7 @@ MIT License - see [LICENSE](LICENSE) for details.
 - [esbuild-wasm](https://github.com/evanw/esbuild) - Lightning-fast JavaScript/TypeScript transformation
 - [just-bash](https://github.com/user/just-bash) - POSIX shell in WebAssembly
 - [React Refresh](https://github.com/facebook/react/tree/main/packages/react-refresh) - Hot module replacement for React
+- [Comlink](https://github.com/GoogleChromeLabs/comlink) - Web Worker communication made simple
 
 ---
 

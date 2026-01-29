@@ -126,7 +126,7 @@ button {
       expect(document.querySelector('link[href="./src/style.css"]')).toBeTruthy();
     });
 
-    it('should inject HMR client that creates BroadcastChannel', async () => {
+    it('should inject HMR client that uses postMessage', async () => {
       const response = await server.handleRequest('GET', '/', {});
       const html = response.body.toString();
 
@@ -137,13 +137,13 @@ button {
       let hmrScript: HTMLScriptElement | null = null;
 
       scripts.forEach((script) => {
-        if (script.textContent?.includes('BroadcastChannel')) {
+        if (script.textContent?.includes('vite-hmr')) {
           hmrScript = script;
         }
       });
 
       expect(hmrScript).toBeTruthy();
-      expect(hmrScript?.textContent).toContain("new BroadcastChannel('vite-hmr')");
+      expect(hmrScript?.textContent).toContain("vite-hmr");
       expect(hmrScript?.textContent).toContain('[HMR] Client ready with React Refresh support');
     });
 
@@ -311,7 +311,7 @@ export default App;`
 
       // Check for HMR script
       const scripts = iframeDoc.querySelectorAll('script');
-      const hasHMR = Array.from(scripts).some((s) => s.textContent?.includes('BroadcastChannel'));
+      const hasHMR = Array.from(scripts).some((s) => s.textContent?.includes('vite-hmr'));
       expect(hasHMR).toBe(true);
 
       iframe.remove();
@@ -414,53 +414,25 @@ export default App;`
   });
 });
 
-describe('BroadcastChannel HMR simulation', () => {
-  it('should be able to create BroadcastChannel in jsdom', () => {
-    // jsdom supports BroadcastChannel
-    const channel = new BroadcastChannel('test-channel');
-    expect(channel).toBeTruthy();
-    channel.close();
-  });
-
-  it('should receive messages on BroadcastChannel', async () => {
-    const received: any[] = [];
-
-    const receiver = new BroadcastChannel('hmr-test');
-    receiver.onmessage = (event) => {
-      received.push(event.data);
-    };
-
-    const sender = new BroadcastChannel('hmr-test');
-    sender.postMessage({ type: 'update', path: '/src/App.jsx' });
-
-    // Wait for message
-    await new Promise((resolve) => setTimeout(resolve, 50));
-
-    expect(received.length).toBe(1);
-    expect(received[0].type).toBe('update');
-    expect(received[0].path).toBe('/src/App.jsx');
-
-    receiver.close();
-    sender.close();
-  });
-
-  it('should simulate HMR update flow', async () => {
-    let vfs = new VirtualFS();
+describe('postMessage HMR simulation', () => {
+  it('should receive HMR updates via postMessage', async () => {
+    const vfs = new VirtualFS();
     vfs.mkdirSync('/src', { recursive: true });
     vfs.writeFileSync('/index.html', '<html></html>');
     vfs.writeFileSync('/src/App.jsx', 'export default () => <div>App</div>');
 
     const server = new ViteDevServer(vfs, { port: 3000 });
-
-    // Simulate iframe receiving HMR updates
-    const iframeChannel = new BroadcastChannel('vite-hmr');
     const updates: any[] = [];
 
-    iframeChannel.onmessage = (event) => {
-      updates.push(event.data);
-    };
+    // Create a mock window to receive HMR updates
+    const mockWindow = {
+      postMessage: (message: any) => {
+        updates.push(message);
+      },
+    } as unknown as Window;
 
-    // Server sends HMR update (this is what ViteDevServer does internally)
+    // Set the HMR target window
+    server.setHMRTarget(mockWindow);
     server.start();
 
     // Simulate file change
@@ -469,10 +441,11 @@ describe('BroadcastChannel HMR simulation', () => {
     // Wait for update
     await new Promise((resolve) => setTimeout(resolve, 100));
 
-    // The server should have broadcast the update
+    // The server should have sent the update via postMessage
     expect(updates.length).toBeGreaterThan(0);
+    expect(updates[0].channel).toBe('vite-hmr');
+    expect(updates[0].type).toBe('update');
 
-    iframeChannel.close();
     server.stop();
   });
 });

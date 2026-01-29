@@ -309,13 +309,20 @@
       File-based routing, API routes, and HMR - all running in your browser
     </p>
 
-    <div style="display: flex; gap: 10px; margin-bottom: 10px;">
+    <div style="display: flex; gap: 10px; margin-bottom: 10px; align-items: center;">
       <button id="pages-router-btn" class="router-toggle active" style="padding: 6px 16px; border-radius: 20px;">
         Pages Router (/pages)
       </button>
       <button id="app-router-btn" class="router-toggle" style="padding: 6px 16px; border-radius: 20px; background: #333;">
         App Router (/app)
       </button>
+      <div style="margin-left: auto; display: flex; align-items: center; gap: 8px;">
+        <label style="display: flex; align-items: center; gap: 6px; cursor: pointer; font-size: 13px; color: #888;">
+          <input type="checkbox" id="worker-toggle" style="width: 16px; height: 16px; cursor: pointer;" />
+          <span>Web Worker Mode</span>
+          <span id="worker-status" style="padding: 2px 8px; border-radius: 10px; font-size: 11px; background: #333; color: #888;">Off</span>
+        </label>
+      </div>
     </div>
     <style>
       .router-toggle.active { background: #0070f3 !important; }
@@ -428,7 +435,7 @@
     </div>
 
     <script type="module">
-      import { initNextDemo, initNextAppRouterDemo, startNextDevServer, VirtualFS, Runtime, PackageManager } from './src/next-demo.ts';
+      import { initNextDemo, initNextAppRouterDemo, startNextDevServer, VirtualFS, Runtime, PackageManager, createRuntime } from './src/next-demo.ts';
 
       // CORS Proxy helpers - use localStorage so iframe can access
       function setCorsProxy(url) {
@@ -466,6 +473,8 @@
       const setProxyBtn = document.getElementById('set-proxy-btn');
       const clearProxyBtn = document.getElementById('clear-proxy-btn');
       const proxyStatus = document.getElementById('proxy-status');
+      const workerToggle = document.getElementById('worker-toggle');
+      const workerStatus = document.getElementById('worker-status');
 
       let vfs = null;
       let runtime = null;
@@ -474,8 +483,21 @@
       let currentFile = '/pages/index.jsx';
       let previewActive = false;
       let useAppRouter = false;
+      let useWorker = false;
       let packageManager = null;
       let installedPackages = new Set(['react', 'react-dom']);
+
+      function updateWorkerStatus() {
+        if (useWorker) {
+          workerStatus.textContent = 'On';
+          workerStatus.style.background = '#22c55e';
+          workerStatus.style.color = 'white';
+        } else {
+          workerStatus.textContent = 'Off';
+          workerStatus.style.background = '#333';
+          workerStatus.style.color = '#888';
+        }
+      }
 
       // File tabs for each router mode
       const pagesRouterTabs = [
@@ -788,6 +810,13 @@ export default function ${jsName.charAt(0).toUpperCase() + jsName.slice(1)}Demo(
       function updatePreview() {
         if (!previewActive || !devServerUrl) return;
 
+        // Set up HMR target when iframe reloads
+        previewFrame.onload = () => {
+          if (devServer && previewFrame.contentWindow) {
+            devServer.setHMRTarget(previewFrame.contentWindow);
+          }
+        };
+
         // Force iframe refresh by adding timestamp
         const url = devServerUrl + '?t=' + Date.now();
         previewFrame.src = url;
@@ -810,6 +839,13 @@ export default function ${jsName.charAt(0).toUpperCase() + jsName.slice(1)}Demo(
         // Append path to devServerUrl (which already includes /__virtual__/port/)
         const fullUrl = devServerUrl + pathWithoutLeadingSlash;
 
+        // Re-register HMR target after navigation
+        previewFrame.onload = () => {
+          if (devServer && previewFrame.contentWindow) {
+            devServer.setHMRTarget(previewFrame.contentWindow);
+          }
+        };
+
         log(`Navigating to: ${path}`);
         previewFrame.src = fullUrl;
         urlInput.value = path;
@@ -821,6 +857,14 @@ export default function ${jsName.charAt(0).toUpperCase() + jsName.slice(1)}Demo(
         previewActive = true;
 
         if (devServerUrl) {
+          // Set up HMR target when iframe loads
+          previewFrame.onload = () => {
+            if (devServer && previewFrame.contentWindow) {
+              devServer.setHMRTarget(previewFrame.contentWindow);
+              log('HMR target connected to iframe', 'hmr');
+            }
+          };
+
           previewFrame.src = devServerUrl;
           urlInput.value = '/';
         }
@@ -847,10 +891,10 @@ export default function ${jsName.charAt(0).toUpperCase() + jsName.slice(1)}Demo(
           outputEl.innerHTML = '';
           urlInput.value = '/';
 
-          // Initialize based on router mode
+          // Initialize based on router mode and worker setting
           const result = useAppRouter
-            ? await initNextAppRouterDemo(outputEl)
-            : await initNextDemo(outputEl);
+            ? await initNextAppRouterDemo(outputEl, { useWorker })
+            : await initNextDemo(outputEl, { useWorker });
 
           vfs = result.vfs;
           runtime = result.runtime;
@@ -1038,6 +1082,18 @@ export default function ${jsName.charAt(0).toUpperCase() + jsName.slice(1)}Demo(
         appRouterBtn.classList.add('active');
         pagesRouterBtn.classList.remove('active');
         log('Switching to App Router...');
+        await init();
+      });
+
+      // Worker toggle
+      workerToggle.addEventListener('change', async () => {
+        useWorker = workerToggle.checked;
+        updateWorkerStatus();
+        log(`Web Worker mode: ${useWorker ? 'ENABLED' : 'DISABLED'}`, useWorker ? 'hmr' : '');
+        if (useWorker) {
+          log('Code execution will run in a separate Web Worker thread');
+          log('This keeps the UI responsive during heavy operations');
+        }
         await init();
       });
 
