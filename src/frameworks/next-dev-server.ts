@@ -964,6 +964,175 @@ export class NextDevServer extends DevServer {
   }
 
   /**
+   * Handle streaming API route requests
+   * This is called by the server bridge for requests that need streaming support
+   */
+  async handleStreamingRequest(
+    method: string,
+    url: string,
+    headers: Record<string, string>,
+    body: Buffer | undefined,
+    onStart: (statusCode: number, statusMessage: string, headers: Record<string, string>) => void,
+    onChunk: (chunk: string | Uint8Array) => void,
+    onEnd: () => void
+  ): Promise<void> {
+    const urlObj = new URL(url, 'http://localhost');
+    const pathname = urlObj.pathname;
+
+    // Only handle API routes
+    if (!pathname.startsWith('/api/')) {
+      onStart(404, 'Not Found', { 'Content-Type': 'application/json' });
+      onChunk(JSON.stringify({ error: 'Not found' }));
+      onEnd();
+      return;
+    }
+
+    const apiFile = this.resolveApiFile(pathname);
+
+    if (!apiFile) {
+      onStart(404, 'Not Found', { 'Content-Type': 'application/json' });
+      onChunk(JSON.stringify({ error: 'API route not found' }));
+      onEnd();
+      return;
+    }
+
+    try {
+      const code = this.vfs.readFileSync(apiFile, 'utf8');
+      const transformed = await this.transformApiHandler(code, apiFile);
+
+      const req = this.createMockRequest(method, pathname, headers, body);
+      const res = this.createStreamingMockResponse(onStart, onChunk, onEnd);
+
+      await this.executeApiHandler(transformed, req, res);
+
+      // Wait for the response to end
+      if (!res.isEnded()) {
+        const timeout = new Promise<void>((_, reject) => {
+          setTimeout(() => reject(new Error('API handler timeout')), 30000);
+        });
+        await Promise.race([res.waitForEnd(), timeout]);
+      }
+    } catch (error) {
+      console.error('[NextDevServer] Streaming API error:', error);
+      onStart(500, 'Internal Server Error', { 'Content-Type': 'application/json' });
+      onChunk(JSON.stringify({ error: error instanceof Error ? error.message : 'Internal Server Error' }));
+      onEnd();
+    }
+  }
+
+  /**
+   * Create a streaming mock response that calls callbacks as data is written
+   */
+  private createStreamingMockResponse(
+    onStart: (statusCode: number, statusMessage: string, headers: Record<string, string>) => void,
+    onChunk: (chunk: string | Uint8Array) => void,
+    onEnd: () => void
+  ) {
+    let statusCode = 200;
+    let statusMessage = 'OK';
+    const headers: Record<string, string> = {};
+    let ended = false;
+    let headersSent = false;
+    let resolveEnded: (() => void) | null = null;
+
+    const endedPromise = new Promise<void>((resolve) => {
+      resolveEnded = resolve;
+    });
+
+    const sendHeaders = () => {
+      if (!headersSent) {
+        headersSent = true;
+        onStart(statusCode, statusMessage, headers);
+      }
+    };
+
+    const markEnded = () => {
+      if (!ended) {
+        sendHeaders();
+        ended = true;
+        onEnd();
+        if (resolveEnded) resolveEnded();
+      }
+    };
+
+    return {
+      headersSent: false,
+
+      status(code: number) {
+        statusCode = code;
+        return this;
+      },
+      setHeader(name: string, value: string) {
+        headers[name] = value;
+        return this;
+      },
+      getHeader(name: string) {
+        return headers[name];
+      },
+      // Write data and stream it immediately
+      write(chunk: string | Buffer): boolean {
+        sendHeaders();
+        const data = typeof chunk === 'string' ? chunk : chunk.toString();
+        onChunk(data);
+        return true;
+      },
+      get writable() {
+        return true;
+      },
+      json(data: unknown) {
+        headers['Content-Type'] = 'application/json; charset=utf-8';
+        sendHeaders();
+        onChunk(JSON.stringify(data));
+        markEnded();
+        return this;
+      },
+      send(data: string | object) {
+        if (typeof data === 'object') {
+          return this.json(data);
+        }
+        sendHeaders();
+        onChunk(data);
+        markEnded();
+        return this;
+      },
+      end(data?: string) {
+        if (data) {
+          sendHeaders();
+          onChunk(data);
+        }
+        markEnded();
+        return this;
+      },
+      redirect(statusOrUrl: number | string, url?: string) {
+        if (typeof statusOrUrl === 'number') {
+          statusCode = statusOrUrl;
+          headers['Location'] = url || '/';
+        } else {
+          statusCode = 307;
+          headers['Location'] = statusOrUrl;
+        }
+        markEnded();
+        return this;
+      },
+      isEnded() {
+        return ended;
+      },
+      waitForEnd() {
+        return endedPromise;
+      },
+      toResponse(): ResponseData {
+        // This shouldn't be called for streaming responses
+        return {
+          statusCode,
+          statusMessage,
+          headers,
+          body: Buffer.from(''),
+        };
+      },
+    };
+  }
+
+  /**
    * Resolve API route to file path
    */
   private resolveApiFile(pathname: string): string | null {
@@ -1029,7 +1198,7 @@ export class NextDevServer extends DevServer {
   }
 
   /**
-   * Create mock Next.js response object
+   * Create mock Next.js response object with streaming support
    */
   private createMockResponse() {
     let statusCode = 200;
@@ -1038,6 +1207,7 @@ export class NextDevServer extends DevServer {
     let responseBody = '';
     let ended = false;
     let resolveEnded: (() => void) | null = null;
+    let headersSent = false;
 
     // Promise that resolves when response is ended
     const endedPromise = new Promise<void>((resolve) => {
@@ -1052,6 +1222,9 @@ export class NextDevServer extends DevServer {
     };
 
     return {
+      // Track if headers have been sent (for streaming)
+      headersSent: false,
+
       status(code: number) {
         statusCode = code;
         return this;
@@ -1059,6 +1232,22 @@ export class NextDevServer extends DevServer {
       setHeader(name: string, value: string) {
         headers[name] = value;
         return this;
+      },
+      getHeader(name: string) {
+        return headers[name];
+      },
+      // Write data to response body (for streaming)
+      write(chunk: string | Buffer): boolean {
+        if (!headersSent) {
+          headersSent = true;
+          this.headersSent = true;
+        }
+        responseBody += typeof chunk === 'string' ? chunk : chunk.toString();
+        return true;
+      },
+      // Writable stream interface for AI SDK compatibility
+      get writable() {
+        return true;
       },
       json(data: unknown) {
         headers['Content-Type'] = 'application/json; charset=utf-8';
@@ -1075,7 +1264,7 @@ export class NextDevServer extends DevServer {
         return this;
       },
       end(data?: string) {
-        if (data) responseBody = data;
+        if (data) responseBody += data;
         markEnded();
         return this;
       },
@@ -1146,16 +1335,21 @@ export class NextDevServer extends DevServer {
       const module = { exports: {} as Record<string, unknown> };
       const exports = module.exports;
 
+      // Create process object with environment variables
+      const process = {
+        env: { ...this.options.env },
+        cwd: () => '/',
+        platform: 'browser',
+        version: 'v18.0.0',
+        versions: { node: '18.0.0' },
+      };
+
       // Execute the transformed code
       // The code is already in CJS format from esbuild transform
-      const wrappedCode = `
-        (function(exports, require, module) {
-          ${code}
-        })
-      `;
-
-      const fn = eval(wrappedCode);
-      fn(exports, require, module);
+      // Use Function constructor instead of eval with template literal
+      // to avoid issues with backticks or ${} in the transformed code
+      const fn = new Function('exports', 'require', 'module', 'process', code);
+      fn(exports, require, module, process);
 
       // Get the handler - check both module.exports and module.exports.default
       let handler = module.exports.default || module.exports;
@@ -1446,6 +1640,9 @@ export class NextDevServer extends DevServer {
       "convex/server": "https://esm.sh/convex@1.21.0/server",
       "convex/values": "https://esm.sh/convex@1.21.0/values",
       "convex/_generated/api": "${virtualPrefix}/convex/_generated/api.ts",
+      "ai": "https://esm.sh/ai@4?external=react",
+      "ai/react": "https://esm.sh/ai@4/react?external=react",
+      "@ai-sdk/openai": "https://esm.sh/@ai-sdk/openai@1",
       "next/link": "${virtualPrefix}/_next/shims/link.js",
       "next/router": "${virtualPrefix}/_next/shims/router.js",
       "next/head": "${virtualPrefix}/_next/shims/head.js",

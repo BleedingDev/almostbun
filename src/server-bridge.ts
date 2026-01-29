@@ -184,38 +184,47 @@ export class ServerBridge extends EventEmitter {
     console.log('[ServerBridge] SW message:', type, id, data?.url);
 
     if (type === 'request') {
-      const { port, method, url, headers, body } = data;
+      const { port, method, url, headers, body, streaming } = data;
 
-      console.log('[ServerBridge] Handling request:', port, method, url);
+      console.log('[ServerBridge] Handling request:', port, method, url, 'streaming:', streaming);
+      if (streaming) {
+        console.log('[ServerBridge] 🔴 Will use streaming handler');
+      }
 
       try {
-        const response = await this.handleRequest(port, method, url, headers, body);
-        console.log('[ServerBridge] Response:', response.statusCode, 'body length:', response.body?.length);
+        if (streaming) {
+          // Handle streaming request
+          await this.handleStreamingRequest(id, port, method, url, headers, body);
+        } else {
+          // Handle regular request
+          const response = await this.handleRequest(port, method, url, headers, body);
+          console.log('[ServerBridge] Response:', response.statusCode, 'body length:', response.body?.length);
 
-        // Convert body to base64 string to avoid structured cloning issues with Uint8Array
-        let bodyBase64 = '';
-        if (response.body && response.body.length > 0) {
-          // Convert Uint8Array to base64 string
-          const bytes = response.body instanceof Uint8Array ? response.body : new Uint8Array(0);
-          let binary = '';
-          for (let i = 0; i < bytes.length; i++) {
-            binary += String.fromCharCode(bytes[i]);
+          // Convert body to base64 string to avoid structured cloning issues with Uint8Array
+          let bodyBase64 = '';
+          if (response.body && response.body.length > 0) {
+            // Convert Uint8Array to base64 string
+            const bytes = response.body instanceof Uint8Array ? response.body : new Uint8Array(0);
+            let binary = '';
+            for (let i = 0; i < bytes.length; i++) {
+              binary += String.fromCharCode(bytes[i]);
+            }
+            bodyBase64 = btoa(binary);
           }
-          bodyBase64 = btoa(binary);
+
+          console.log('[ServerBridge] Sending response to SW, body base64 length:', bodyBase64.length);
+
+          this.messageChannel?.port1.postMessage({
+            type: 'response',
+            id,
+            data: {
+              statusCode: response.statusCode,
+              statusMessage: response.statusMessage,
+              headers: response.headers,
+              bodyBase64: bodyBase64,
+            },
+          });
         }
-
-        console.log('[ServerBridge] Sending response to SW, body base64 length:', bodyBase64.length);
-
-        this.messageChannel?.port1.postMessage({
-          type: 'response',
-          id,
-          data: {
-            statusCode: response.statusCode,
-            statusMessage: response.statusMessage,
-            headers: response.headers,
-            bodyBase64: bodyBase64,
-          },
-        });
       } catch (error) {
         this.messageChannel?.port1.postMessage({
           type: 'response',
@@ -223,6 +232,104 @@ export class ServerBridge extends EventEmitter {
           error: error instanceof Error ? error.message : 'Unknown error',
         });
       }
+    }
+  }
+
+  /**
+   * Handle a streaming request - sends chunks as they arrive
+   */
+  private async handleStreamingRequest(
+    id: number,
+    port: number,
+    method: string,
+    url: string,
+    headers: Record<string, string>,
+    body?: ArrayBuffer
+  ): Promise<void> {
+    const virtualServer = this.servers.get(port);
+
+    if (!virtualServer) {
+      this.messageChannel?.port1.postMessage({
+        type: 'stream-start',
+        id,
+        data: { statusCode: 503, statusMessage: 'Service Unavailable', headers: {} },
+      });
+      this.messageChannel?.port1.postMessage({ type: 'stream-end', id });
+      return;
+    }
+
+    // Check if the server supports streaming (has handleStreamingRequest method)
+    const server = virtualServer.server as any;
+    if (typeof server.handleStreamingRequest === 'function') {
+      console.log('[ServerBridge] 🟢 Server has streaming support, calling handleStreamingRequest');
+      // Use streaming handler
+      const bodyBuffer = body ? Buffer.from(new Uint8Array(body)) : undefined;
+
+      await server.handleStreamingRequest(
+        method,
+        url,
+        headers,
+        bodyBuffer,
+        // onStart - called with headers
+        (statusCode: number, statusMessage: string, respHeaders: Record<string, string>) => {
+          console.log('[ServerBridge] 🟢 onStart called, sending stream-start');
+          this.messageChannel?.port1.postMessage({
+            type: 'stream-start',
+            id,
+            data: { statusCode, statusMessage, headers: respHeaders },
+          });
+        },
+        // onChunk - called for each chunk
+        (chunk: string | Uint8Array) => {
+          const bytes = typeof chunk === 'string' ? new TextEncoder().encode(chunk) : chunk;
+          let binary = '';
+          for (let i = 0; i < bytes.length; i++) {
+            binary += String.fromCharCode(bytes[i]);
+          }
+          const chunkBase64 = btoa(binary);
+          console.log('[ServerBridge] 🟡 onChunk called, sending stream-chunk, size:', chunkBase64.length);
+          this.messageChannel?.port1.postMessage({
+            type: 'stream-chunk',
+            id,
+            data: { chunkBase64 },
+          });
+        },
+        // onEnd - called when response is complete
+        () => {
+          console.log('[ServerBridge] 🟢 onEnd called, sending stream-end');
+          this.messageChannel?.port1.postMessage({ type: 'stream-end', id });
+        }
+      );
+    } else {
+      // Fall back to regular request handling
+      const bodyBuffer = body ? Buffer.from(new Uint8Array(body)) : undefined;
+      const response = await virtualServer.server.handleRequest(method, url, headers, bodyBuffer);
+
+      // Send as a single stream
+      this.messageChannel?.port1.postMessage({
+        type: 'stream-start',
+        id,
+        data: {
+          statusCode: response.statusCode,
+          statusMessage: response.statusMessage,
+          headers: response.headers,
+        },
+      });
+
+      if (response.body && response.body.length > 0) {
+        const bytes = response.body instanceof Uint8Array ? response.body : new Uint8Array(0);
+        let binary = '';
+        for (let i = 0; i < bytes.length; i++) {
+          binary += String.fromCharCode(bytes[i]);
+        }
+        this.messageChannel?.port1.postMessage({
+          type: 'stream-chunk',
+          id,
+          data: { chunkBase64: btoa(binary) },
+        });
+      }
+
+      this.messageChannel?.port1.postMessage({ type: 'stream-end', id });
     }
   }
 

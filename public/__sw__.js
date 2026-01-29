@@ -47,7 +47,7 @@ self.addEventListener('message', (event) => {
 function handleMainMessage(event) {
   const { type, id, data, error } = event.data;
 
-  console.log('[SW] Received message from main:', type, 'id:', id, 'hasData:', !!data, 'hasError:', !!error);
+  console.log('[SW] Received message from main:', type, 'id:', id);
 
   if (type === 'response') {
     const pending = pendingRequests.get(id);
@@ -69,6 +69,57 @@ function handleMainMessage(event) {
         });
         pending.resolve(data);
       }
+    }
+  }
+
+  // Handle streaming responses
+  if (type === 'stream-start') {
+    console.log('[SW] 🟢 stream-start received, id:', id);
+    const pending = pendingRequests.get(id);
+    if (pending && pending.streamController) {
+      // Store headers/status for the streaming response
+      pending.streamData = data;
+      pending.resolveHeaders(data);
+      console.log('[SW] 🟢 headers resolved for stream', id);
+    } else {
+      console.log('[SW] 🔴 No pending request or controller for stream-start', id, !!pending, pending?.streamController);
+    }
+  }
+
+  if (type === 'stream-chunk') {
+    console.log('[SW] 🟡 stream-chunk received, id:', id, 'size:', data?.chunkBase64?.length);
+    const pending = pendingRequests.get(id);
+    if (pending && pending.streamController) {
+      try {
+        // Decode base64 chunk and enqueue
+        if (data.chunkBase64) {
+          const binary = atob(data.chunkBase64);
+          const bytes = new Uint8Array(binary.length);
+          for (let i = 0; i < binary.length; i++) {
+            bytes[i] = binary.charCodeAt(i);
+          }
+          pending.streamController.enqueue(bytes);
+          console.log('[SW] 🟡 chunk enqueued, bytes:', bytes.length);
+        }
+      } catch (e) {
+        console.error('[SW] Error enqueueing chunk:', e);
+      }
+    } else {
+      console.log('[SW] 🔴 No pending request or controller for stream-chunk', id);
+    }
+  }
+
+  if (type === 'stream-end') {
+    console.log('[SW] 🟢 stream-end received, id:', id);
+    const pending = pendingRequests.get(id);
+    if (pending && pending.streamController) {
+      try {
+        pending.streamController.close();
+        console.log('[SW] 🟢 stream closed');
+      } catch (e) {
+        console.log('[SW] stream already closed');
+      }
+      pendingRequests.delete(id);
     }
   }
 }
@@ -103,6 +154,50 @@ async function sendRequest(port, method, url, headers, body) {
       data: { port, method, url, headers, body },
     });
   });
+}
+
+/**
+ * Send streaming request to main thread
+ * Returns a ReadableStream that receives chunks from main thread
+ */
+function sendStreamingRequest(port, method, url, headers, body) {
+  console.log('[SW] sendStreamingRequest called, url:', url);
+
+  if (!mainPort) {
+    throw new Error('Service Worker not initialized');
+  }
+
+  const id = ++requestId;
+
+  let streamController;
+  let resolveHeaders;
+  const headersPromise = new Promise(resolve => { resolveHeaders = resolve; });
+
+  const stream = new ReadableStream({
+    start(controller) {
+      streamController = controller;
+
+      // Store in pending requests so handleMainMessage can find it
+      pendingRequests.set(id, {
+        resolve: () => {},
+        reject: (err) => controller.error(err),
+        streamController: controller,
+        resolveHeaders,
+      });
+
+      // Send request to main thread with streaming flag
+      mainPort.postMessage({
+        type: 'request',
+        id,
+        data: { port, method, url, headers, body, streaming: true },
+      });
+    },
+    cancel() {
+      pendingRequests.delete(id);
+    }
+  });
+
+  return { stream, headersPromise, id };
 }
 
 /**
@@ -180,6 +275,15 @@ async function handleVirtualRequest(request, port, path) {
       body = await request.arrayBuffer();
     }
 
+    // Check if this is an API route that might stream (POST to /api/*)
+    const isStreamingCandidate = request.method === 'POST' && path.startsWith('/api/');
+
+    if (isStreamingCandidate) {
+      console.log('[SW] 🔴 Using streaming mode for:', path);
+      return handleStreamingRequest(port, request.method, path, headers, body);
+    }
+    console.log('[SW] Using non-streaming mode for:', request.method, path);
+
     console.log('[SW] Sending request to main thread:', port, request.method, path);
 
     // Send to main thread
@@ -208,17 +312,17 @@ async function handleVirtualRequest(request, port, path) {
 
         // Merge response headers with CORP/COEP headers to allow iframe embedding
         // The parent page has COEP: credentialless, so we need matching headers
-        const headers = new Headers(response.headers);
-        headers.set('Cross-Origin-Embedder-Policy', 'credentialless');
-        headers.set('Cross-Origin-Opener-Policy', 'same-origin');
-        headers.set('Cross-Origin-Resource-Policy', 'cross-origin');
+        const respHeaders = new Headers(response.headers);
+        respHeaders.set('Cross-Origin-Embedder-Policy', 'credentialless');
+        respHeaders.set('Cross-Origin-Opener-Policy', 'same-origin');
+        respHeaders.set('Cross-Origin-Resource-Policy', 'cross-origin');
         // Remove any headers that might block iframe loading
-        headers.delete('X-Frame-Options');
+        respHeaders.delete('X-Frame-Options');
 
         finalResponse = new Response(blob, {
           status: response.statusCode,
           statusText: response.statusMessage,
-          headers: headers,
+          headers: respHeaders,
         });
       } catch (decodeError) {
         console.error('[SW] Failed to decode base64 body:', decodeError);
@@ -246,6 +350,31 @@ async function handleVirtualRequest(request, port, path) {
       headers: { 'Content-Type': 'text/plain' },
     });
   }
+}
+
+/**
+ * Handle a streaming request
+ */
+async function handleStreamingRequest(port, method, path, headers, body) {
+  const { stream, headersPromise, id } = sendStreamingRequest(port, method, path, headers, body);
+
+  // Wait for headers to arrive
+  const responseData = await headersPromise;
+
+  console.log('[SW] Streaming response started:', responseData?.statusCode);
+
+  // Build response headers
+  const respHeaders = new Headers(responseData?.headers || {});
+  respHeaders.set('Cross-Origin-Embedder-Policy', 'credentialless');
+  respHeaders.set('Cross-Origin-Opener-Policy', 'same-origin');
+  respHeaders.set('Cross-Origin-Resource-Policy', 'cross-origin');
+  respHeaders.delete('X-Frame-Options');
+
+  return new Response(stream, {
+    status: responseData?.statusCode || 200,
+    statusText: responseData?.statusMessage || 'OK',
+    headers: respHeaders,
+  });
 }
 
 /**

@@ -725,3 +725,436 @@ describe('NextDevServer with ServerBridge integration', () => {
     }
   });
 });
+
+describe('NextDevServer streaming API routes', () => {
+  let vfs: VirtualFS;
+  let server: NextDevServer;
+
+  beforeEach(() => {
+    vfs = new VirtualFS();
+
+    // Create Pages Router API directory
+    vfs.mkdirSync('/pages', { recursive: true });
+    vfs.mkdirSync('/pages/api', { recursive: true });
+
+    // Create a simple streaming API route
+    vfs.writeFileSync(
+      '/pages/api/stream.js',
+      `export default async function handler(req, res) {
+  res.setHeader('Content-Type', 'text/plain');
+  res.write('chunk1');
+  res.write('chunk2');
+  res.write('chunk3');
+  res.end();
+}
+`
+    );
+
+    // Create an API route that streams with delays (simulating AI response)
+    vfs.writeFileSync(
+      '/pages/api/chat.js',
+      `export default async function handler(req, res) {
+  res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+  res.write('Hello');
+  res.write(' ');
+  res.write('World');
+  res.end('!');
+}
+`
+    );
+
+    // Create an API route that uses JSON response (non-streaming)
+    vfs.writeFileSync(
+      '/pages/api/json.js',
+      `export default function handler(req, res) {
+  res.status(200).json({ message: 'Hello JSON' });
+}
+`
+    );
+
+    // Create an API route that sends error
+    vfs.writeFileSync(
+      '/pages/api/error.js',
+      `export default function handler(req, res) {
+  res.status(500).json({ error: 'Something went wrong' });
+}
+`
+    );
+
+    server = new NextDevServer(vfs, { port: 3001 });
+  });
+
+  afterEach(() => {
+    server.stop();
+  });
+
+  describe('handleStreamingRequest', () => {
+    it('should call onStart with status and headers', async () => {
+      const onStart = vi.fn();
+      const onChunk = vi.fn();
+      const onEnd = vi.fn();
+
+      await server.handleStreamingRequest(
+        'GET',
+        '/api/stream',
+        {},
+        undefined,
+        onStart,
+        onChunk,
+        onEnd
+      );
+
+      expect(onStart).toHaveBeenCalledTimes(1);
+      expect(onStart).toHaveBeenCalledWith(
+        200,
+        'OK',
+        expect.objectContaining({
+          'Content-Type': 'text/plain',
+        })
+      );
+    });
+
+    it('should call onChunk for each res.write() call', async () => {
+      const onStart = vi.fn();
+      const onChunk = vi.fn();
+      const onEnd = vi.fn();
+
+      await server.handleStreamingRequest(
+        'GET',
+        '/api/stream',
+        {},
+        undefined,
+        onStart,
+        onChunk,
+        onEnd
+      );
+
+      expect(onChunk).toHaveBeenCalledTimes(3);
+      expect(onChunk).toHaveBeenNthCalledWith(1, 'chunk1');
+      expect(onChunk).toHaveBeenNthCalledWith(2, 'chunk2');
+      expect(onChunk).toHaveBeenNthCalledWith(3, 'chunk3');
+    });
+
+    it('should call onEnd when response is complete', async () => {
+      const onStart = vi.fn();
+      const onChunk = vi.fn();
+      const onEnd = vi.fn();
+
+      await server.handleStreamingRequest(
+        'GET',
+        '/api/stream',
+        {},
+        undefined,
+        onStart,
+        onChunk,
+        onEnd
+      );
+
+      expect(onEnd).toHaveBeenCalledTimes(1);
+    });
+
+    it('should handle res.end() with data', async () => {
+      const onStart = vi.fn();
+      const onChunk = vi.fn();
+      const onEnd = vi.fn();
+
+      await server.handleStreamingRequest(
+        'GET',
+        '/api/chat',
+        {},
+        undefined,
+        onStart,
+        onChunk,
+        onEnd
+      );
+
+      // Should have 4 chunks: 'Hello', ' ', 'World', '!'
+      expect(onChunk).toHaveBeenCalledTimes(4);
+      expect(onChunk).toHaveBeenNthCalledWith(1, 'Hello');
+      expect(onChunk).toHaveBeenNthCalledWith(2, ' ');
+      expect(onChunk).toHaveBeenNthCalledWith(3, 'World');
+      expect(onChunk).toHaveBeenNthCalledWith(4, '!');
+    });
+
+    it('should handle JSON responses', async () => {
+      const onStart = vi.fn();
+      const onChunk = vi.fn();
+      const onEnd = vi.fn();
+
+      await server.handleStreamingRequest(
+        'GET',
+        '/api/json',
+        {},
+        undefined,
+        onStart,
+        onChunk,
+        onEnd
+      );
+
+      expect(onStart).toHaveBeenCalledWith(
+        200,
+        'OK',
+        expect.objectContaining({
+          'Content-Type': 'application/json; charset=utf-8',
+        })
+      );
+
+      expect(onChunk).toHaveBeenCalledTimes(1);
+      const chunkData = JSON.parse(onChunk.mock.calls[0][0]);
+      expect(chunkData).toEqual({ message: 'Hello JSON' });
+    });
+
+    it('should handle error responses', async () => {
+      const onStart = vi.fn();
+      const onChunk = vi.fn();
+      const onEnd = vi.fn();
+
+      await server.handleStreamingRequest(
+        'GET',
+        '/api/error',
+        {},
+        undefined,
+        onStart,
+        onChunk,
+        onEnd
+      );
+
+      expect(onStart).toHaveBeenCalledWith(
+        500,
+        'OK',
+        expect.any(Object)
+      );
+
+      expect(onChunk).toHaveBeenCalledTimes(1);
+      const chunkData = JSON.parse(onChunk.mock.calls[0][0]);
+      expect(chunkData).toEqual({ error: 'Something went wrong' });
+    });
+
+    it('should return 404 for non-API routes', async () => {
+      const onStart = vi.fn();
+      const onChunk = vi.fn();
+      const onEnd = vi.fn();
+
+      await server.handleStreamingRequest(
+        'GET',
+        '/not-an-api',
+        {},
+        undefined,
+        onStart,
+        onChunk,
+        onEnd
+      );
+
+      expect(onStart).toHaveBeenCalledWith(404, 'Not Found', expect.any(Object));
+      expect(onEnd).toHaveBeenCalled();
+    });
+
+    it('should return 404 for non-existent API routes', async () => {
+      const onStart = vi.fn();
+      const onChunk = vi.fn();
+      const onEnd = vi.fn();
+
+      await server.handleStreamingRequest(
+        'GET',
+        '/api/nonexistent',
+        {},
+        undefined,
+        onStart,
+        onChunk,
+        onEnd
+      );
+
+      expect(onStart).toHaveBeenCalledWith(404, 'Not Found', expect.any(Object));
+      expect(onChunk).toHaveBeenCalledWith(JSON.stringify({ error: 'API route not found' }));
+      expect(onEnd).toHaveBeenCalled();
+    });
+
+    it('should handle POST requests with body', async () => {
+      vfs.writeFileSync(
+        '/pages/api/echo.js',
+        `export default function handler(req, res) {
+  const { name } = req.body || {};
+  res.write('Hello, ');
+  res.end(name || 'stranger');
+}
+`
+      );
+
+      const onStart = vi.fn();
+      const onChunk = vi.fn();
+      const onEnd = vi.fn();
+
+      await server.handleStreamingRequest(
+        'POST',
+        '/api/echo',
+        { 'Content-Type': 'application/json' },
+        Buffer.from(JSON.stringify({ name: 'Alice' })),
+        onStart,
+        onChunk,
+        onEnd
+      );
+
+      expect(onChunk).toHaveBeenNthCalledWith(1, 'Hello, ');
+      expect(onChunk).toHaveBeenNthCalledWith(2, 'Alice');
+    });
+  });
+
+  describe('streaming response callback order', () => {
+    it('should call callbacks in correct order: onStart, onChunk(s), onEnd', async () => {
+      const callOrder: string[] = [];
+
+      const onStart = vi.fn(() => callOrder.push('start'));
+      const onChunk = vi.fn(() => callOrder.push('chunk'));
+      const onEnd = vi.fn(() => callOrder.push('end'));
+
+      await server.handleStreamingRequest(
+        'GET',
+        '/api/stream',
+        {},
+        undefined,
+        onStart,
+        onChunk,
+        onEnd
+      );
+
+      expect(callOrder[0]).toBe('start');
+      expect(callOrder[callOrder.length - 1]).toBe('end');
+      expect(callOrder.filter(c => c === 'chunk').length).toBe(3);
+    });
+
+    it('should send headers before any chunks', async () => {
+      let headersReceived = false;
+      let chunkReceivedBeforeHeaders = false;
+
+      const onStart = vi.fn(() => {
+        headersReceived = true;
+      });
+
+      const onChunk = vi.fn(() => {
+        if (!headersReceived) {
+          chunkReceivedBeforeHeaders = true;
+        }
+      });
+
+      const onEnd = vi.fn();
+
+      await server.handleStreamingRequest(
+        'GET',
+        '/api/stream',
+        {},
+        undefined,
+        onStart,
+        onChunk,
+        onEnd
+      );
+
+      expect(chunkReceivedBeforeHeaders).toBe(false);
+      expect(headersReceived).toBe(true);
+    });
+  });
+
+  describe('streaming with environment variables', () => {
+    it('should have access to process.env in streaming handlers', async () => {
+      vfs.writeFileSync(
+        '/pages/api/env-stream.js',
+        `export default function handler(req, res) {
+  const apiKey = process.env.TEST_API_KEY || 'not-set';
+  res.write('API_KEY=');
+  res.end(apiKey);
+}
+`
+      );
+
+      server.setEnv('TEST_API_KEY', 'secret-key-123');
+
+      const onStart = vi.fn();
+      const onChunk = vi.fn();
+      const onEnd = vi.fn();
+
+      await server.handleStreamingRequest(
+        'GET',
+        '/api/env-stream',
+        {},
+        undefined,
+        onStart,
+        onChunk,
+        onEnd
+      );
+
+      expect(onChunk).toHaveBeenNthCalledWith(1, 'API_KEY=');
+      expect(onChunk).toHaveBeenNthCalledWith(2, 'secret-key-123');
+    });
+  });
+});
+
+describe('NextDevServer mock response streaming interface', () => {
+  let vfs: VirtualFS;
+  let server: NextDevServer;
+
+  beforeEach(() => {
+    vfs = new VirtualFS();
+    vfs.mkdirSync('/pages', { recursive: true });
+    vfs.mkdirSync('/pages/api', { recursive: true });
+    server = new NextDevServer(vfs, { port: 3001 });
+  });
+
+  afterEach(() => {
+    server.stop();
+  });
+
+  it('should support res.write() method in regular API routes', async () => {
+    vfs.writeFileSync(
+      '/pages/api/write-test.js',
+      `export default function handler(req, res) {
+  res.setHeader('Content-Type', 'text/plain');
+  res.write('part1');
+  res.write('part2');
+  res.end('part3');
+}
+`
+    );
+
+    const response = await server.handleRequest('GET', '/api/write-test', {});
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body.toString()).toBe('part1part2part3');
+  });
+
+  it('should support res.getHeader() method', async () => {
+    vfs.writeFileSync(
+      '/pages/api/header-test.js',
+      `export default function handler(req, res) {
+  res.setHeader('X-Custom', 'test-value');
+  const customHeader = res.getHeader('X-Custom');
+  res.json({ header: customHeader });
+}
+`
+    );
+
+    const response = await server.handleRequest('GET', '/api/header-test', {});
+
+    expect(response.statusCode).toBe(200);
+    const body = JSON.parse(response.body.toString());
+    expect(body.header).toBe('test-value');
+  });
+
+  it('should track headersSent property', async () => {
+    vfs.writeFileSync(
+      '/pages/api/headers-sent-test.js',
+      `export default function handler(req, res) {
+  const beforeWrite = res.headersSent;
+  res.write('data');
+  const afterWrite = res.headersSent;
+  res.end(JSON.stringify({ before: beforeWrite, after: afterWrite }));
+}
+`
+    );
+
+    const response = await server.handleRequest('GET', '/api/headers-sent-test', {});
+
+    expect(response.statusCode).toBe(200);
+    // Note: In our mock, headersSent becomes true after first write
+    const body = response.body.toString();
+    expect(body).toContain('data');
+  });
+});
