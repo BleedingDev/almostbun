@@ -2,11 +2,16 @@
  * Virtual File System - In-memory file tree with POSIX-like operations
  */
 
+import type { VFSSnapshot, VFSFileEntry } from './runtime-interface';
+
 export interface FSNode {
   type: 'file' | 'directory';
   content?: Uint8Array;
   children?: Map<string, FSNode>;
 }
+
+// Simple EventEmitter for VFS change notifications
+type VFSEventListener = (...args: unknown[]) => void;
 
 export interface Stats {
   isFile(): boolean;
@@ -98,12 +103,155 @@ export class VirtualFS {
   private encoder = new TextEncoder();
   private decoder = new TextDecoder();
   private watchers = new Map<string, Set<WatcherEntry>>();
+  private eventListeners = new Map<string, Set<VFSEventListener>>();
 
   constructor() {
     this.root = {
       type: 'directory',
       children: new Map(),
     };
+  }
+
+  /**
+   * Add event listener (for change notifications to workers)
+   */
+  on(event: string, listener: VFSEventListener): this {
+    if (!this.eventListeners.has(event)) {
+      this.eventListeners.set(event, new Set());
+    }
+    this.eventListeners.get(event)!.add(listener);
+    return this;
+  }
+
+  /**
+   * Remove event listener
+   */
+  off(event: string, listener: VFSEventListener): this {
+    const listeners = this.eventListeners.get(event);
+    if (listeners) {
+      listeners.delete(listener);
+    }
+    return this;
+  }
+
+  /**
+   * Emit event to listeners
+   */
+  private emit(event: string, ...args: unknown[]): void {
+    const listeners = this.eventListeners.get(event);
+    if (listeners) {
+      for (const listener of listeners) {
+        try {
+          listener(...args);
+        } catch (err) {
+          console.error('Error in VFS event listener:', err);
+        }
+      }
+    }
+  }
+
+  /**
+   * Serialize the entire file tree to a snapshot (for worker transfer)
+   */
+  toSnapshot(): VFSSnapshot {
+    const files: VFSFileEntry[] = [];
+    this.serializeNode('/', this.root, files);
+    return { files };
+  }
+
+  private serializeNode(path: string, node: FSNode, files: VFSFileEntry[]): void {
+    if (node.type === 'file') {
+      // Encode binary content as base64
+      let content = '';
+      if (node.content && node.content.length > 0) {
+        let binary = '';
+        for (let i = 0; i < node.content.length; i++) {
+          binary += String.fromCharCode(node.content[i]);
+        }
+        content = btoa(binary);
+      }
+      files.push({ path, type: 'file', content });
+    } else if (node.type === 'directory') {
+      files.push({ path, type: 'directory' });
+      if (node.children) {
+        for (const [name, child] of node.children) {
+          const childPath = path === '/' ? `/${name}` : `${path}/${name}`;
+          this.serializeNode(childPath, child, files);
+        }
+      }
+    }
+  }
+
+  /**
+   * Create a VirtualFS from a snapshot
+   */
+  static fromSnapshot(snapshot: VFSSnapshot): VirtualFS {
+    const vfs = new VirtualFS();
+
+    // Sort entries to ensure directories are created before their contents
+    const sortedFiles = [...snapshot.files].sort((a, b) => {
+      const aDepth = a.path.split('/').length;
+      const bDepth = b.path.split('/').length;
+      return aDepth - bDepth;
+    });
+
+    for (const entry of sortedFiles) {
+      if (entry.path === '/') continue; // Skip root
+
+      if (entry.type === 'directory') {
+        vfs.mkdirSync(entry.path, { recursive: true });
+      } else if (entry.type === 'file') {
+        // Decode base64 content
+        let content: Uint8Array;
+        if (entry.content) {
+          const binary = atob(entry.content);
+          content = new Uint8Array(binary.length);
+          for (let i = 0; i < binary.length; i++) {
+            content[i] = binary.charCodeAt(i);
+          }
+        } else {
+          content = new Uint8Array(0);
+        }
+        // Ensure parent directory exists
+        const parentPath = entry.path.substring(0, entry.path.lastIndexOf('/')) || '/';
+        if (parentPath !== '/' && !vfs.existsSync(parentPath)) {
+          vfs.mkdirSync(parentPath, { recursive: true });
+        }
+        vfs.writeFileSyncInternal(entry.path, content, false); // Don't emit events during restore
+      }
+    }
+
+    return vfs;
+  }
+
+  /**
+   * Internal write that optionally emits events
+   */
+  private writeFileSyncInternal(path: string, data: string | Uint8Array, emitEvent: boolean): void {
+    const normalized = this.normalizePath(path);
+    const parentPath = this.getParentPath(normalized);
+    const basename = this.getBasename(normalized);
+
+    if (!basename) {
+      throw new Error(`EISDIR: illegal operation on a directory, '${path}'`);
+    }
+
+    const parent = this.ensureDirectory(parentPath);
+    const existed = parent.children!.has(basename);
+
+    const content = typeof data === 'string' ? this.encoder.encode(data) : data;
+
+    parent.children!.set(basename, {
+      type: 'file',
+      content,
+    });
+
+    if (emitEvent) {
+      // Notify watchers
+      this.notifyWatchers(normalized, existed ? 'change' : 'rename');
+      // Emit change event for worker sync
+      this.emit('change', normalized, typeof data === 'string' ? data : this.decoder.decode(data));
+    }
   }
 
   /**
@@ -284,26 +432,7 @@ export class VirtualFS {
    * Write data to file, creating parent directories as needed
    */
   writeFileSync(path: string, data: string | Uint8Array): void {
-    const normalized = this.normalizePath(path);
-    const parentPath = this.getParentPath(normalized);
-    const basename = this.getBasename(normalized);
-
-    if (!basename) {
-      throw new Error(`EISDIR: illegal operation on a directory, '${path}'`);
-    }
-
-    const parent = this.ensureDirectory(parentPath);
-    const existed = parent.children!.has(basename);
-
-    const content = typeof data === 'string' ? this.encoder.encode(data) : data;
-
-    parent.children!.set(basename, {
-      type: 'file',
-      content,
-    });
-
-    // Notify watchers
-    this.notifyWatchers(normalized, existed ? 'change' : 'rename');
+    this.writeFileSyncInternal(path, data, true);
   }
 
   /**
@@ -389,6 +518,8 @@ export class VirtualFS {
 
     // Notify watchers
     this.notifyWatchers(normalized, 'rename');
+    // Emit delete event for worker sync
+    this.emit('delete', normalized);
   }
 
   /**

@@ -6,6 +6,7 @@
  */
 
 import { VirtualFS } from './virtual-fs';
+import type { IRuntime, IExecuteResult, IRuntimeOptions } from './runtime-interface';
 import { createFsShim, FsShim } from './shims/fs';
 import * as pathShim from './shims/path';
 import { createProcess, Process } from './shims/process';
@@ -769,6 +770,8 @@ function createConsoleWrapper(
 
 /**
  * Runtime class for executing code in virtual environment
+ * Note: This class has sync methods for backward compatibility.
+ * Use createRuntime() factory for IRuntime interface compliance.
  */
 export class Runtime {
   private vfs: VirtualFS;
@@ -886,7 +889,7 @@ export class Runtime {
   }
 
   /**
-   * Execute code as a module
+   * Execute code as a module (synchronous - backward compatible)
    */
   execute(
     code: string,
@@ -968,11 +971,39 @@ ${code}
   }
 
   /**
-   * Run a file from the virtual file system
+   * Execute code as a module (async version for IRuntime interface)
+   * Alias: executeSync() is the same as execute() for backward compatibility
+   */
+  executeSync = this.execute;
+
+  /**
+   * Execute code as a module (async - for IRuntime interface)
+   */
+  async executeAsync(
+    code: string,
+    filename: string = '/index.js'
+  ): Promise<IExecuteResult> {
+    return Promise.resolve(this.execute(code, filename));
+  }
+
+  /**
+   * Run a file from the virtual file system (synchronous - backward compatible)
    */
   runFile(filename: string): { exports: unknown; module: Module } {
     const code = this.vfs.readFileSync(filename, 'utf8');
     return this.execute(code, filename);
+  }
+
+  /**
+   * Alias for runFile (backward compatibility)
+   */
+  runFileSync = this.runFile;
+
+  /**
+   * Run a file from the virtual file system (async - for IRuntime interface)
+   */
+  async runFileAsync(filename: string): Promise<IExecuteResult> {
+    return Promise.resolve(this.runFile(filename));
   }
 
   /**
@@ -998,7 +1029,7 @@ ${code}
 }
 
 /**
- * Create and execute code in a new runtime
+ * Create and execute code in a new runtime (synchronous - backward compatible)
  */
 export function execute(
   code: string,
@@ -1008,5 +1039,8 @@ export function execute(
   const runtime = new Runtime(vfs, options);
   return runtime.execute(code);
 }
+
+// Re-export types
+export type { IRuntime, IExecuteResult, IRuntimeOptions } from './runtime-interface';
 
 export default Runtime;
