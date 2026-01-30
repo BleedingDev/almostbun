@@ -59,10 +59,32 @@ export interface IRuntime {
  */
 export interface CreateRuntimeOptions extends IRuntimeOptions {
   /**
-   * Whether to use a Web Worker for code execution
+   * Cross-origin sandbox URL for secure code execution.
+   * When set, code runs in a cross-origin iframe, providing browser-enforced
+   * isolation from cookies, localStorage, and IndexedDB.
+   *
+   * Example: 'https://myapp-sandbox.vercel.app'
+   */
+  sandbox?: string;
+
+  /**
+   * Explicitly allow same-origin execution (less secure).
+   * Required when not using sandbox mode.
+   *
+   * WARNING: Same-origin execution allows untrusted code to access
+   * cookies, localStorage, and other same-origin resources.
+   * Only use this for trusted code or demos.
+   */
+  dangerouslyAllowSameOrigin?: boolean;
+
+  /**
+   * Whether to use a Web Worker for code execution (same-origin only)
    * - false (default): Execute on main thread
    * - true: Execute in a Web Worker
    * - 'auto': Use worker if available, fallback to main thread
+   *
+   * Note: Workers provide thread isolation but NOT origin isolation.
+   * They still have access to IndexedDB and can make network requests.
    */
   useWorker?: boolean | 'auto';
 }

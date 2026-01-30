@@ -7,9 +7,15 @@
 
 export { VirtualFS } from './virtual-fs';
 export type { FSNode, Stats, FSWatcher, WatchListener, WatchEventType } from './virtual-fs';
-export { Runtime, execute, Module, RuntimeOptions, RequireFunction } from './runtime';
-export { createFsShim, FsShim } from './shims/fs';
-export { createProcess, Process, ProcessEnv } from './shims/process';
+export { Runtime, execute } from './runtime';
+export type { Module, RuntimeOptions, RequireFunction } from './runtime';
+export { createRuntime, WorkerRuntime, SandboxRuntime } from './create-runtime';
+export type { IRuntime, IExecuteResult, CreateRuntimeOptions, IRuntimeOptions, VFSSnapshot } from './runtime-interface';
+export { generateSandboxFiles, getSandboxHtml, getSandboxVercelConfig, SANDBOX_SETUP_INSTRUCTIONS } from './sandbox-helpers';
+export { createFsShim } from './shims/fs';
+export type { FsShim } from './shims/fs';
+export { createProcess } from './shims/process';
+export type { Process, ProcessEnv } from './shims/process';
 export * as path from './shims/path';
 export * as http from './shims/http';
 export * as net from './shims/net';
@@ -22,9 +28,12 @@ export * as npm from './npm';
 export { PackageManager, install } from './npm';
 export { ServerBridge, getServerBridge, resetServerBridge } from './server-bridge';
 // Dev servers
-export { DevServer, DevServerOptions, ResponseData, HMRUpdate } from './dev-server';
-export { ViteDevServer, ViteDevServerOptions } from './frameworks/vite-dev-server';
-export { NextDevServer, NextDevServerOptions } from './frameworks/next-dev-server';
+export { DevServer } from './dev-server';
+export type { DevServerOptions, ResponseData, HMRUpdate } from './dev-server';
+export { ViteDevServer } from './frameworks/vite-dev-server';
+export type { ViteDevServerOptions } from './frameworks/vite-dev-server';
+export { NextDevServer } from './frameworks/next-dev-server';
+export type { NextDevServerOptions } from './frameworks/next-dev-server';
 // New shims for Vite support
 export * as chokidar from './shims/chokidar';
 export * as ws from './shims/ws';

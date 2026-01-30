@@ -1,0 +1,509 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Sandbox Demo - Secure Cross-Origin Execution</title>
+    <style>
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+        margin: 0;
+        padding: 20px;
+        background: #0a0a0a;
+        color: #eee;
+        min-height: 100vh;
+      }
+
+      h1 {
+        color: #fff;
+        margin-bottom: 10px;
+      }
+
+      h1 span {
+        background: linear-gradient(90deg, #22c55e 0%, #16a34a 100%);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+      }
+
+      .subtitle {
+        color: #888;
+        margin-bottom: 20px;
+      }
+
+      .security-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        background: linear-gradient(90deg, #22c55e20, #16a34a20);
+        border: 1px solid #22c55e40;
+        padding: 6px 14px;
+        border-radius: 20px;
+        font-size: 13px;
+        color: #22c55e;
+        margin-left: 10px;
+      }
+
+      .container {
+        display: grid;
+        grid-template-columns: 1fr 1fr 1fr;
+        gap: 20px;
+        height: calc(100vh - 180px);
+      }
+
+      .panel {
+        background: #1a1a1a;
+        border: 1px solid #333;
+        border-radius: 12px;
+        padding: 15px;
+        display: flex;
+        flex-direction: column;
+      }
+
+      .panel-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 10px;
+        padding-bottom: 10px;
+        border-bottom: 1px solid #333;
+      }
+
+      .panel-title {
+        font-weight: bold;
+        color: #fff;
+      }
+
+      .output {
+        flex: 1;
+        background: #111;
+        border-radius: 8px;
+        padding: 10px;
+        font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+        font-size: 11px;
+        overflow-y: auto;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+
+      .output div {
+        margin-bottom: 2px;
+      }
+
+      .output .success {
+        color: #22c55e;
+        font-weight: bold;
+      }
+
+      .output .error {
+        color: #ef4444;
+      }
+
+      .output .info {
+        color: #3b82f6;
+      }
+
+      .editor-container {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+      }
+
+      textarea {
+        flex: 1;
+        background: #111;
+        border: 1px solid #333;
+        border-radius: 8px;
+        padding: 12px;
+        font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+        font-size: 13px;
+        color: #eee;
+        resize: none;
+        line-height: 1.5;
+      }
+
+      textarea:focus {
+        outline: none;
+        border-color: #22c55e;
+      }
+
+      .actions {
+        display: flex;
+        gap: 10px;
+        margin-top: 10px;
+      }
+
+      button {
+        padding: 10px 20px;
+        border: none;
+        border-radius: 8px;
+        cursor: pointer;
+        font-weight: 500;
+        transition: background 0.2s;
+      }
+
+      button:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+
+      #run-btn {
+        background: #22c55e;
+        color: white;
+      }
+
+      #run-btn:hover:not(:disabled) {
+        background: #16a34a;
+      }
+
+      .status {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .status-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: #666;
+      }
+
+      .status-dot.connecting {
+        background: #f59e0b;
+        animation: pulse 1s infinite;
+      }
+
+      .status-dot.ready {
+        background: #22c55e;
+      }
+
+      .status-dot.error {
+        background: #ef4444;
+      }
+
+      @keyframes pulse {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.5; }
+      }
+
+      .sandbox-config {
+        background: #252525;
+        border: 1px solid #333;
+        border-radius: 8px;
+        padding: 12px;
+        margin-bottom: 15px;
+      }
+
+      .sandbox-config label {
+        display: block;
+        font-size: 12px;
+        color: #888;
+        margin-bottom: 6px;
+      }
+
+      .sandbox-config input {
+        width: 100%;
+        padding: 8px 10px;
+        background: #111;
+        border: 1px solid #444;
+        border-radius: 6px;
+        color: #eee;
+        font-size: 13px;
+      }
+
+      .sandbox-config input:focus {
+        outline: none;
+        border-color: #22c55e;
+      }
+
+      .info-box {
+        background: #1e3a5f20;
+        border: 1px solid #3b82f640;
+        border-radius: 8px;
+        padding: 12px;
+        margin-bottom: 15px;
+        font-size: 12px;
+        color: #93c5fd;
+      }
+
+      .preview-frame {
+        flex: 1;
+        border: none;
+        border-radius: 8px;
+        background: #fff;
+      }
+
+      .iframe-info {
+        font-size: 11px;
+        color: #666;
+        margin-top: 8px;
+        padding: 8px;
+        background: #111;
+        border-radius: 6px;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>
+      <span>Sandbox Mode</span> Demo
+      <span class="security-badge">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+        </svg>
+        Cross-Origin Isolated
+      </span>
+    </h1>
+    <p class="subtitle">
+      Code runs in a separate origin iframe - cookies, localStorage, and IndexedDB are fully isolated
+    </p>
+
+    <div class="info-box">
+      <strong>How it works:</strong> The sandbox runs on <code>localhost:3002</code> while this page runs on <code>localhost:5173</code>.
+      Because they're different origins, browser security prevents the sandbox from accessing this page's cookies, localStorage, or IndexedDB.
+      <br><br>
+      <strong>Setup:</strong>
+      <ol style="margin: 8px 0 0 20px; padding: 0;">
+        <li>Terminal 1: <code>npm run sandbox</code> (serves sandbox on port 3002)</li>
+        <li>Terminal 2: <code>npm run dev</code> (serves this demo on port 5173)</li>
+        <li>Open this page and click "Connect to Sandbox"</li>
+      </ol>
+    </div>
+
+    <div class="container">
+      <!-- Left Panel: Code Editor -->
+      <div class="panel">
+        <div class="panel-header">
+          <span class="panel-title">Code Editor</span>
+          <div class="status">
+            <div class="status-dot" id="status-dot"></div>
+            <span id="status-text">Not connected</span>
+          </div>
+        </div>
+
+        <div class="sandbox-config">
+          <label for="sandbox-url">Sandbox URL</label>
+          <input type="text" id="sandbox-url" value="http://localhost:3002/sandbox/" placeholder="http://localhost:3002/sandbox/" />
+        </div>
+
+        <div class="editor-container">
+          <textarea id="editor" placeholder="Loading...">// Test code execution in sandbox
+const path = require('path');
+const fs = require('fs');
+
+// This runs in a completely isolated origin!
+// It cannot access cookies, localStorage, or IndexedDB
+// from the main application.
+
+console.log('Hello from the sandbox!');
+console.log('CWD:', process.cwd());
+
+// Test path module
+const joined = path.join('/app', 'src', 'index.js');
+console.log('Path join:', joined);
+
+// Test fs module
+fs.writeFileSync('/test.txt', 'Hello, World!');
+const content = fs.readFileSync('/test.txt', 'utf8');
+console.log('File content:', content);
+
+// Export a result
+module.exports = {
+  success: true,
+  message: 'Code executed in isolated sandbox!',
+  timestamp: new Date().toISOString(),
+};</textarea>
+        </div>
+
+        <div class="actions">
+          <button id="run-btn" disabled>Run in Sandbox</button>
+          <button id="init-btn" style="background: #3b82f6; color: white;">Connect to Sandbox</button>
+        </div>
+      </div>
+
+      <!-- Middle Panel: Result -->
+      <div class="panel">
+        <div class="panel-header">
+          <span class="panel-title">Execution Result</span>
+          <button id="clear-result-btn" style="padding: 4px 8px; font-size: 12px; background: #333;">Clear</button>
+        </div>
+        <div class="output" id="result-output">
+          <div class="info">Click "Connect to Sandbox" to initialize...</div>
+        </div>
+        <div class="iframe-info">
+          <strong>Sandbox iframe:</strong> <span id="iframe-origin">Not connected</span>
+        </div>
+      </div>
+
+      <!-- Right Panel: Console -->
+      <div class="panel">
+        <div class="panel-header">
+          <span class="panel-title">Console Output</span>
+          <button id="clear-console-btn" style="padding: 4px 8px; font-size: 12px; background: #333;">Clear</button>
+        </div>
+        <div class="output" id="console-output"></div>
+      </div>
+    </div>
+
+    <script type="module">
+      import { VirtualFS, createRuntime } from './src/index.ts';
+
+      const editorEl = document.getElementById('editor');
+      const statusDot = document.getElementById('status-dot');
+      const statusText = document.getElementById('status-text');
+      const runBtn = document.getElementById('run-btn');
+      const initBtn = document.getElementById('init-btn');
+      const sandboxUrlInput = document.getElementById('sandbox-url');
+      const resultOutput = document.getElementById('result-output');
+      const consoleOutput = document.getElementById('console-output');
+      const clearResultBtn = document.getElementById('clear-result-btn');
+      const clearConsoleBtn = document.getElementById('clear-console-btn');
+      const iframeOriginEl = document.getElementById('iframe-origin');
+
+      let vfs = null;
+      let runtime = null;
+
+      function setStatus(status, text) {
+        statusDot.className = 'status-dot ' + status;
+        statusText.textContent = text;
+      }
+
+      function logToConsole(message, className = '') {
+        const line = document.createElement('div');
+        line.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
+        if (className) line.className = className;
+        consoleOutput.appendChild(line);
+        consoleOutput.scrollTop = consoleOutput.scrollHeight;
+      }
+
+      function logToResult(message, className = '') {
+        const line = document.createElement('div');
+        if (typeof message === 'object') {
+          line.textContent = JSON.stringify(message, null, 2);
+        } else {
+          line.textContent = message;
+        }
+        if (className) line.className = className;
+        resultOutput.appendChild(line);
+        resultOutput.scrollTop = resultOutput.scrollHeight;
+      }
+
+      async function initSandbox() {
+        const sandboxUrl = sandboxUrlInput.value.trim();
+        if (!sandboxUrl) {
+          logToConsole('Please enter a sandbox URL', 'error');
+          return;
+        }
+
+        try {
+          setStatus('connecting', 'Connecting...');
+          logToConsole('Initializing sandbox at: ' + sandboxUrl);
+          logToConsole('This page origin: ' + window.location.origin, 'info');
+
+          // Create VFS with some test files
+          vfs = new VirtualFS();
+          vfs.mkdirSync('/app', { recursive: true });
+          vfs.writeFileSync('/app/package.json', JSON.stringify({
+            name: 'sandbox-test',
+            version: '1.0.0',
+          }, null, 2));
+
+          // Create runtime with sandbox URL
+          logToConsole('Creating SandboxRuntime...');
+          runtime = await createRuntime(vfs, {
+            sandbox: sandboxUrl,
+            cwd: '/app',
+            env: {
+              NODE_ENV: 'development',
+              SANDBOX_MODE: 'true',
+            },
+            onConsole: (method, args) => {
+              const message = args.map(a => typeof a === 'object' ? JSON.stringify(a) : String(a)).join(' ');
+              logToConsole(`[sandbox.${method}] ${message}`);
+            },
+          });
+
+          // Update UI
+          const sandboxOrigin = new URL(sandboxUrl).origin;
+          iframeOriginEl.innerHTML = `<span style="color: #22c55e;">${sandboxOrigin}</span> (different from ${window.location.origin})`;
+
+          setStatus('ready', 'Connected');
+          logToConsole('Sandbox connected successfully!', 'success');
+          logToConsole('Sandbox origin: ' + sandboxOrigin, 'info');
+          logToConsole('');
+          logToConsole('Security: The sandbox CANNOT access:', 'info');
+          logToConsole('  - Cookies from ' + window.location.origin, 'info');
+          logToConsole('  - localStorage from ' + window.location.origin, 'info');
+          logToConsole('  - IndexedDB from ' + window.location.origin, 'info');
+
+          runBtn.disabled = false;
+          initBtn.textContent = 'Reconnect';
+
+        } catch (error) {
+          setStatus('error', 'Connection failed');
+          logToConsole('Failed to connect: ' + error.message, 'error');
+          console.error(error);
+        }
+      }
+
+      async function runCode() {
+        if (!runtime) {
+          logToConsole('Please connect to sandbox first', 'error');
+          return;
+        }
+
+        const code = editorEl.value;
+        resultOutput.innerHTML = '';
+
+        try {
+          runBtn.disabled = true;
+          runBtn.textContent = 'Running...';
+          logToConsole('Executing code in sandbox...');
+
+          const result = await runtime.execute(code, '/app/main.js');
+
+          logToConsole('Execution complete!', 'success');
+          logToResult('Exports:', 'success');
+          logToResult(result.exports);
+
+        } catch (error) {
+          logToConsole('Execution error: ' + error.message, 'error');
+          logToResult('Error: ' + error.message, 'error');
+          console.error(error);
+        } finally {
+          runBtn.disabled = false;
+          runBtn.textContent = 'Run in Sandbox';
+        }
+      }
+
+      // Event listeners
+      initBtn.addEventListener('click', initSandbox);
+      runBtn.addEventListener('click', runCode);
+
+      clearResultBtn.addEventListener('click', () => {
+        resultOutput.innerHTML = '';
+      });
+
+      clearConsoleBtn.addEventListener('click', () => {
+        consoleOutput.innerHTML = '';
+      });
+
+      // Keyboard shortcut: Ctrl/Cmd + Enter to run
+      editorEl.addEventListener('keydown', (e) => {
+        if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+          e.preventDefault();
+          if (!runBtn.disabled) {
+            runCode();
+          }
+        }
+      });
+
+      // Auto-connect on page load if sandbox URL is valid
+      logToConsole('Sandbox demo loaded', 'info');
+      logToConsole('Click "Connect to Sandbox" to initialize', 'info');
+    </script>
+  </body>
+</html>

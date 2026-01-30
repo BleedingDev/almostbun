@@ -41,7 +41,9 @@
     "test:run": "vitest run",
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",
-    "test:e2e:debug": "playwright test --debug"
+    "test:e2e:debug": "playwright test --debug",
+    "sandbox": "vite --port 3002 --config vite.sandbox.config.js",
+    "sandbox:demo": "echo 'Run in two terminals:\\n  Terminal 1: npm run sandbox (serves sandbox on port 3002)\\n  Terminal 2: npm run dev (serves main app on port 5173)\\nThen open: http://localhost:5173/sandbox-next-demo.html'"
   },
   "dependencies": {
     "@webcontainer/api": "^1.6.1",

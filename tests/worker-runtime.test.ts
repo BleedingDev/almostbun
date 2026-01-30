@@ -18,7 +18,7 @@ describe('WorkerRuntime', () => {
 
   describe('createRuntime factory', () => {
     it('should create main-thread runtime when useWorker is false', async () => {
-      const runtime = await createRuntime(vfs, { useWorker: false });
+      const runtime = await createRuntime(vfs, { dangerouslyAllowSameOrigin: true, useWorker: false });
       // Check it has the expected interface
       expect(typeof runtime.execute).toBe('function');
       expect(typeof runtime.runFile).toBe('function');
@@ -26,8 +26,12 @@ describe('WorkerRuntime', () => {
       expect(typeof runtime.getVFS).toBe('function');
     });
 
-    it('should create main-thread runtime by default', async () => {
-      const runtime = await createRuntime(vfs);
+    it('should throw error when neither sandbox nor dangerouslyAllowSameOrigin is provided', async () => {
+      await expect(createRuntime(vfs)).rejects.toThrow('just-node: For security');
+    });
+
+    it('should create runtime with dangerouslyAllowSameOrigin', async () => {
+      const runtime = await createRuntime(vfs, { dangerouslyAllowSameOrigin: true });
       expect(typeof runtime.execute).toBe('function');
     });
 
@@ -37,7 +41,7 @@ describe('WorkerRuntime', () => {
       // @ts-expect-error - intentionally removing Worker
       delete globalThis.Worker;
 
-      const runtime = await createRuntime(vfs, { useWorker: true });
+      const runtime = await createRuntime(vfs, { dangerouslyAllowSameOrigin: true, useWorker: true });
       expect(typeof runtime.execute).toBe('function');
 
       // Restore Worker
@@ -47,7 +51,7 @@ describe('WorkerRuntime', () => {
 
   describe('Runtime.execute() async interface', () => {
     it('should return a Promise from execute()', async () => {
-      const runtime = await createRuntime(vfs, { useWorker: false });
+      const runtime = await createRuntime(vfs, { dangerouslyAllowSameOrigin: true, useWorker: false });
       const result = runtime.execute('module.exports = 42;');
       expect(result).toBeInstanceOf(Promise);
       const resolved = await result;
@@ -56,7 +60,7 @@ describe('WorkerRuntime', () => {
 
     it('should return a Promise from runFile()', async () => {
       vfs.writeFileSync('/project/test.js', 'module.exports = "hello";');
-      const runtime = await createRuntime(vfs, { useWorker: false });
+      const runtime = await createRuntime(vfs, { dangerouslyAllowSameOrigin: true, useWorker: false });
       const result = runtime.runFile('/project/test.js');
       expect(result).toBeInstanceOf(Promise);
       const resolved = await result;
@@ -103,7 +107,7 @@ describe('WorkerRuntime', () => {
 
     for (const { name, code, expected, expectedFn } of testCases) {
       it(`main-thread: ${name}`, async () => {
-        const runtime = await createRuntime(vfs, { useWorker: false });
+        const runtime = await createRuntime(vfs, { dangerouslyAllowSameOrigin: true, useWorker: false });
         const result = await runtime.execute(code);
 
         if (expectedFn) {
@@ -118,6 +122,7 @@ describe('WorkerRuntime', () => {
   describe('environment variables', () => {
     it('should pass env to runtime', async () => {
       const runtime = await createRuntime(vfs, {
+        dangerouslyAllowSameOrigin: true,
         useWorker: false,
         env: { TEST_VAR: 'hello', NODE_ENV: 'test' },
       });
@@ -127,6 +132,7 @@ describe('WorkerRuntime', () => {
 
     it('should handle multiple env vars', async () => {
       const runtime = await createRuntime(vfs, {
+        dangerouslyAllowSameOrigin: true,
         useWorker: false,
         env: { VAR1: 'one', VAR2: 'two', VAR3: 'three' },
       });
@@ -146,6 +152,7 @@ describe('WorkerRuntime', () => {
       const logs: Array<{ method: string; args: unknown[] }> = [];
 
       const runtime = await createRuntime(vfs, {
+        dangerouslyAllowSameOrigin: true,
         useWorker: false,
         onConsole: (method, args) => logs.push({ method, args }),
       });
@@ -161,13 +168,13 @@ describe('WorkerRuntime', () => {
 
   describe('error handling', () => {
     it('should propagate syntax errors', async () => {
-      const runtime = await createRuntime(vfs, { useWorker: false });
+      const runtime = await createRuntime(vfs, { dangerouslyAllowSameOrigin: true, useWorker: false });
 
       await expect(runtime.execute('this is not valid javascript {')).rejects.toThrow();
     });
 
     it('should propagate runtime errors', async () => {
-      const runtime = await createRuntime(vfs, { useWorker: false });
+      const runtime = await createRuntime(vfs, { dangerouslyAllowSameOrigin: true, useWorker: false });
 
       await expect(
         runtime.execute('throw new Error("test error");')
@@ -175,7 +182,7 @@ describe('WorkerRuntime', () => {
     });
 
     it('should propagate require errors for missing modules', async () => {
-      const runtime = await createRuntime(vfs, { useWorker: false });
+      const runtime = await createRuntime(vfs, { dangerouslyAllowSameOrigin: true, useWorker: false });
 
       await expect(
         runtime.execute('require("nonexistent-module");')
@@ -193,7 +200,7 @@ describe('WorkerRuntime', () => {
         };
       `);
 
-      const runtime = await createRuntime(vfs, { useWorker: false });
+      const runtime = await createRuntime(vfs, { dangerouslyAllowSameOrigin: true, useWorker: false });
 
       // First call
       const result1 = await runtime.execute(`
@@ -215,7 +222,7 @@ describe('WorkerRuntime', () => {
     it('should clear cache when requested', async () => {
       vfs.writeFileSync('/project/value.js', 'module.exports = 1;');
 
-      const runtime = await createRuntime(vfs, { useWorker: false });
+      const runtime = await createRuntime(vfs, { dangerouslyAllowSameOrigin: true, useWorker: false });
 
       const result1 = await runtime.execute('module.exports = require("/project/value.js");');
       expect(result1.exports).toBe(1);
@@ -239,6 +246,7 @@ describe('WorkerRuntime', () => {
   describe('working directory', () => {
     it('should use specified cwd', async () => {
       const runtime = await createRuntime(vfs, {
+        dangerouslyAllowSameOrigin: true,
         useWorker: false,
         cwd: '/project',
       });
@@ -248,7 +256,7 @@ describe('WorkerRuntime', () => {
     });
 
     it('should default to root', async () => {
-      const runtime = await createRuntime(vfs, { useWorker: false });
+      const runtime = await createRuntime(vfs, { dangerouslyAllowSameOrigin: true, useWorker: false });
 
       const result = await runtime.execute('module.exports = process.cwd();');
       expect(result.exports).toBe('/');

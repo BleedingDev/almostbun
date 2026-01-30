@@ -19,6 +19,7 @@ A lightweight, browser-native Node.js runtime environment. Run Node.js code, ins
 - **TypeScript Support** - First-class TypeScript/TSX transformation via esbuild-wasm
 - **Service Worker Architecture** - Intercepts requests for seamless dev experience
 - **Optional Web Worker Support** - Offload code execution to a Web Worker for improved UI responsiveness
+- **Secure by Default** - Cross-origin sandbox support for running untrusted code safely
 
 ---
 
@@ -254,37 +255,88 @@ const module = runtime.require('/path/to/module.js');
 
 ### createRuntime (Async Runtime Factory)
 
-For advanced use cases, you can use `createRuntime` to create a runtime with optional Web Worker support:
+For advanced use cases, use `createRuntime` to create a runtime with security options:
 
 ```typescript
 import { createRuntime, VirtualFS } from 'just-node';
 
 const vfs = new VirtualFS();
 
-// Main thread execution (default, backward compatible)
-const runtime = await createRuntime(vfs, { useWorker: false });
+// RECOMMENDED: Cross-origin sandbox (fully isolated)
+const secureRuntime = await createRuntime(vfs, {
+  sandbox: 'https://your-sandbox.vercel.app',
+});
 
-// Web Worker execution (opt-in)
-const workerRuntime = await createRuntime(vfs, {
-  useWorker: true,
+// For demos/trusted code: Same-origin with explicit opt-in
+const demoRuntime = await createRuntime(vfs, {
+  dangerouslyAllowSameOrigin: true,
+  useWorker: true,  // Optional: run in Web Worker
   cwd: '/project',
   env: { NODE_ENV: 'development' },
-  onConsole: (method, args) => console.log(`[${method}]`, ...args),
 });
 
 // Both modes use the same async API
-const result = await runtime.execute('module.exports = 1 + 1;');
+const result = await secureRuntime.execute('module.exports = 1 + 1;');
 console.log(result.exports); // 2
-
-const fileResult = await runtime.runFile('/project/index.js');
 ```
 
-**When to use Web Worker mode:**
-- Heavy computations that might block the UI
-- Long-running builds or bundling operations
-- When you need a responsive UI during code execution
+#### Security Modes
 
-**Note:** Web Worker mode uses `postMessage` for communication (no SharedArrayBuffer required), so it works without special COOP/COEP headers. File system changes on the main thread are automatically synchronized to the worker.
+| Mode | Option | Security Level | Use Case |
+|------|--------|----------------|----------|
+| **Cross-origin sandbox** | `sandbox: 'https://...'` | Highest | Production, untrusted code |
+| **Same-origin Worker** | `dangerouslyAllowSameOrigin: true, useWorker: true` | Medium | Demos with trusted code |
+| **Same-origin main thread** | `dangerouslyAllowSameOrigin: true` | Lowest | Trusted code only |
+
+**Security by default:** `createRuntime()` throws an error if neither `sandbox` nor `dangerouslyAllowSameOrigin` is provided.
+
+---
+
+## Sandbox Setup
+
+For running untrusted code securely, deploy a cross-origin sandbox:
+
+### 1. Generate sandbox files
+
+```typescript
+import { generateSandboxFiles } from 'just-node';
+
+const files = generateSandboxFiles();
+// files['index.html'] - Sandbox HTML page
+// files['vercel.json'] - CORS headers config
+```
+
+### 2. Deploy to Vercel
+
+```bash
+mkdir sandbox
+# Write files to sandbox/
+cd sandbox && vercel --prod
+# → https://your-app-sandbox.vercel.app
+```
+
+### 3. Use in your app
+
+```typescript
+const runtime = await createRuntime(vfs, {
+  sandbox: 'https://your-app-sandbox.vercel.app',
+});
+
+// Code runs in isolated cross-origin iframe
+// Cannot access parent's cookies, localStorage, or IndexedDB
+const result = await runtime.execute(untrustedCode);
+```
+
+### What cross-origin sandbox protects
+
+| Threat | Status |
+|--------|--------|
+| Cookies | Blocked (different origin) |
+| localStorage | Blocked (different origin) |
+| IndexedDB | Blocked (different origin) |
+| DOM access | Blocked (cross-origin iframe) |
+
+**Note:** Network requests from the sandbox are still possible. Add CSP headers for additional protection.
 
 ### PackageManager
 

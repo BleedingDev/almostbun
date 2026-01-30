@@ -1585,6 +1585,7 @@ export async function initNextDemo(
 
   log(`Initializing runtime (${useWorker ? 'Web Worker mode' : 'main thread'})...`);
   const runtime = await createRuntime(vfs, {
+    dangerouslyAllowSameOrigin: true, // Demo uses trusted code
     useWorker,
     cwd: '/',
     env: {
@@ -1749,6 +1750,7 @@ export async function initNextAppRouterDemo(
 
   log(`Initializing runtime (${useWorker ? 'Web Worker mode' : 'main thread'})...`);
   const runtime = await createRuntime(vfs, {
+    dangerouslyAllowSameOrigin: true, // Demo uses trusted code
     useWorker,
     cwd: '/',
     env: {
