@@ -709,6 +709,75 @@ describe('NextDevServer environment variables', () => {
       expect(html).toContain('My App');
     });
   });
+
+  describe('App Router client-side navigation', () => {
+    beforeEach(() => {
+      // Set up App Router structure with multiple pages
+      vfs.mkdirSync('/app', { recursive: true });
+      vfs.mkdirSync('/app/about', { recursive: true });
+      vfs.writeFileSync('/app/page.tsx', `
+        import Link from 'next/link';
+        export default function Home() {
+          return <div><h1>Home</h1><Link href="/about">About</Link></div>;
+        }
+      `);
+      vfs.writeFileSync('/app/about/page.tsx', `
+        export default function About() {
+          return <div><h1>About Page</h1></div>;
+        }
+      `);
+      vfs.writeFileSync('/app/layout.tsx', `
+        export default function Layout({ children }) {
+          return <html><body>{children}</body></html>;
+        }
+      `);
+    });
+
+    it('should use client-side navigation instead of full reload', async () => {
+      server = new NextDevServer(vfs, {
+        port: 3001,
+        preferAppRouter: true,
+      });
+
+      const response = await server.handleRequest('GET', '/', {});
+      const html = response.body.toString();
+
+      // Should have the Router component for dynamic navigation
+      expect(html).toContain('function Router()');
+      expect(html).toContain('async function loadPage(pathname)');
+      expect(html).toContain("window.addEventListener('popstate'");
+      // Should NOT contain window.location.reload
+      expect(html).not.toContain('window.location.reload()');
+    });
+
+    it('should serve app page components via /_next/app/', async () => {
+      server = new NextDevServer(vfs, {
+        port: 3001,
+        preferAppRouter: true,
+      });
+
+      // Request the about page component
+      const response = await server.handleRequest('GET', '/_next/app/app/about/page.js', {});
+
+      expect(response.statusCode).toBe(200);
+      expect(response.headers['Content-Type']).toBe('application/javascript; charset=utf-8');
+      expect(response.body.toString()).toContain('About Page');
+    });
+
+    it('should serve app layout components via /_next/app/', async () => {
+      server = new NextDevServer(vfs, {
+        port: 3001,
+        preferAppRouter: true,
+      });
+
+      // Request the root layout component
+      const response = await server.handleRequest('GET', '/_next/app/app/layout.js', {});
+
+      expect(response.statusCode).toBe(200);
+      expect(response.headers['Content-Type']).toBe('application/javascript; charset=utf-8');
+      expect(response.body.toString()).toContain('children');
+    });
+  });
 });
 
 describe('NextDevServer with ServerBridge integration', () => {
