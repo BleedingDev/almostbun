@@ -104,13 +104,7 @@ export interface BuildResult {
   outputFiles?: Array<{ path: string; contents: Uint8Array; text: string }>;
 }
 
-// Declare window type for esbuild singleton
-declare global {
-  interface Window {
-    __esbuild?: typeof import('esbuild-wasm');
-    __esbuildInitPromise?: Promise<void>;
-  }
-}
+// Window.__esbuild type is declared in src/types/external.d.ts
 
 // ============================================================================
 // Export Condition Resolution
@@ -761,7 +755,7 @@ export async function build(options: BuildOptions): Promise<BuildResult> {
     entryPoints,
     plugins,
     write: false,
-  });
+  }) as BuildResult;
 
   // Strip 'vfs:' namespace prefix from output file paths
   // The namespace prefix causes issues when the CLI uses these paths

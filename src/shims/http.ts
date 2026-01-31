@@ -3,7 +3,7 @@
  * Provides IncomingMessage, ServerResponse, and Server for virtual HTTP handling
  */
 
-import { EventEmitter } from './events';
+import { EventEmitter, type EventListener } from './events';
 import { Readable, Writable, Buffer } from './stream';
 import { Socket, Server as NetServer, AddressInfo } from './net';
 
@@ -109,7 +109,7 @@ export class ServerResponse extends Writable {
   socket: Socket | null;
 
   private _headers: Map<string, string | string[]> = new Map();
-  private _body: Buffer[] = [];
+  private _body: Uint8Array[] = [];
   private _resolve?: (response: ResponseData) => void;
 
   constructor(req: IncomingMessage) {
@@ -181,7 +181,7 @@ export class ServerResponse extends Writable {
   }
 
   write(
-    chunk: Buffer | string,
+    chunk: Uint8Array | string,
     encodingOrCallback?: BufferEncoding | ((error?: Error | null) => void),
     callback?: (error?: Error | null) => void
   ): boolean {
@@ -198,14 +198,14 @@ export class ServerResponse extends Writable {
   }
 
   end(
-    chunkOrCallback?: Buffer | string | (() => void),
+    chunkOrCallback?: Uint8Array | string | (() => void),
     encodingOrCallback?: BufferEncoding | (() => void),
     callback?: () => void
   ): this {
     if (typeof chunkOrCallback === 'function') {
       callback = chunkOrCallback;
     } else if (chunkOrCallback !== undefined) {
-      this.write(chunkOrCallback as Buffer | string);
+      this.write(chunkOrCallback as Uint8Array | string);
     }
 
     if (typeof encodingOrCallback === 'function') {
@@ -505,11 +505,11 @@ export class ClientRequest extends Writable {
 
   private _options: RequestOptions;
   private _protocol: 'http' | 'https';
-  private _bodyChunks: Buffer[] = [];
+  private _bodyChunks: Uint8Array[] = [];
   private _aborted: boolean = false;
   private _timeout: number | null = null;
   private _timeoutId: ReturnType<typeof setTimeout> | null = null;
-  private _ended: boolean = false;
+  private _requestEnded: boolean = false;
 
   constructor(options: RequestOptions, protocol: 'http' | 'https' = 'http') {
     super();
@@ -539,7 +539,7 @@ export class ClientRequest extends Writable {
   }
 
   write(
-    chunk: Buffer | string,
+    chunk: Uint8Array | string,
     encodingOrCallback?: BufferEncoding | ((error?: Error | null) => void),
     callback?: (error?: Error | null) => void
   ): boolean {
@@ -555,19 +555,19 @@ export class ClientRequest extends Writable {
   }
 
   end(
-    dataOrCallback?: Buffer | string | (() => void),
+    dataOrCallback?: Uint8Array | string | (() => void),
     encodingOrCallback?: BufferEncoding | (() => void),
     callback?: () => void
   ): this {
-    if (this._ended) return this;
-    this._ended = true;
+    if (this._requestEnded) return this;
+    this._requestEnded = true;
 
     // Handle overloaded arguments
     let finalCallback = callback;
     if (typeof dataOrCallback === 'function') {
       finalCallback = dataOrCallback;
     } else if (dataOrCallback !== undefined) {
-      this.write(dataOrCallback as Buffer | string);
+      this.write(dataOrCallback as Uint8Array | string);
     }
 
     if (typeof encodingOrCallback === 'function') {
@@ -738,7 +738,7 @@ export function request(
   const { options, callback: cb } = parseRequestArgs(urlOrOptions, optionsOrCallback, callback);
   const req = new ClientRequest(options, 'http');
   if (cb) {
-    req.once('response', cb);
+    req.once('response', cb as unknown as EventListener);
   }
   return req;
 }
@@ -754,7 +754,7 @@ export function get(
   const { options, callback: cb } = parseRequestArgs(urlOrOptions, optionsOrCallback, callback);
   const req = new ClientRequest({ ...options, method: 'GET' }, 'http');
   if (cb) {
-    req.once('response', cb);
+    req.once('response', cb as unknown as EventListener);
   }
   req.end();
   return req;
@@ -773,7 +773,7 @@ export function _createClientRequest(
   const { options, callback: cb } = parseRequestArgs(urlOrOptions, optionsOrCallback, callback);
   const req = new ClientRequest(options, protocol);
   if (cb) {
-    req.once('response', cb);
+    req.once('response', cb as unknown as EventListener);
   }
   return req;
 }

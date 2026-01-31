@@ -13,8 +13,22 @@ import {
 import { EventEmitter } from './shims/events';
 import { Buffer } from './shims/stream';
 
+/**
+ * Interface for virtual servers that can be registered with the bridge
+ */
+export interface IVirtualServer {
+  listening: boolean;
+  address(): { port: number; address: string; family: string } | null;
+  handleRequest(
+    method: string,
+    url: string,
+    headers: Record<string, string>,
+    body?: Buffer | string
+  ): Promise<ResponseData>;
+}
+
 export interface VirtualServer {
-  server: Server;
+  server: Server | IVirtualServer;
   port: number;
   hostname: string;
 }
@@ -58,7 +72,7 @@ export class ServerBridge extends EventEmitter {
   /**
    * Register a server on a port
    */
-  registerServer(server: Server, port: number, hostname: string = '0.0.0.0'): void {
+  registerServer(server: Server | IVirtualServer, port: number, hostname: string = '0.0.0.0'): void {
     this.servers.set(port, { server, port, hostname });
 
     // Emit server-ready event

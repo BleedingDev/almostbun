@@ -6,9 +6,6 @@
 import type {
   IFileSystem,
   FsStat,
-  DirentEntry,
-  ReadFileOptions,
-  WriteFileOptions,
   MkdirOptions,
   RmOptions,
   CpOptions,
@@ -17,6 +14,23 @@ import type {
 } from 'just-bash';
 import type { VirtualFS } from '../virtual-fs';
 import { createNodeError } from '../virtual-fs';
+
+// Local types for just-bash interface compatibility
+// These are not exported from just-bash main entry point
+interface DirentEntry {
+  name: string;
+  isFile: boolean;
+  isDirectory: boolean;
+  isSymbolicLink: boolean;
+}
+
+interface ReadFileOptions {
+  encoding?: BufferEncoding | null;
+}
+
+interface WriteFileOptions {
+  encoding?: BufferEncoding;
+}
 
 export class VirtualFSAdapter implements IFileSystem {
   constructor(private vfs: VirtualFS) {}

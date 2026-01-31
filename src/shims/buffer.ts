@@ -27,9 +27,9 @@ export const constants = {
 // transcode function - simplified
 export function transcode(
   source: Uint8Array,
-  fromEnc: string,
-  toEnc: string
-): Buffer {
+  _fromEnc: string,
+  _toEnc: string
+): InstanceType<typeof Buffer> {
   // Simplified - just return a copy
   return Buffer.from(source);
 }

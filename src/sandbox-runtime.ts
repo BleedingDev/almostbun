@@ -9,7 +9,7 @@ import type { VirtualFS } from './virtual-fs';
 import type { IRuntime, IExecuteResult, IRuntimeOptions, VFSSnapshot } from './runtime-interface';
 
 interface SandboxMessage {
-  type: 'init' | 'execute' | 'runFile' | 'clearCache' | 'syncFile' | 'ready' | 'result' | 'error';
+  type: 'init' | 'execute' | 'runFile' | 'clearCache' | 'syncFile' | 'ready' | 'result' | 'error' | 'console';
   id?: string;
   code?: string;
   filename?: string;

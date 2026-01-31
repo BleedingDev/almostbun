@@ -11,7 +11,9 @@ export interface FSNode {
 }
 
 // Simple EventEmitter for VFS change notifications
-type VFSEventListener = (...args: unknown[]) => void;
+type VFSChangeListener = (path: string, content: string) => void;
+type VFSDeleteListener = (path: string) => void;
+type VFSEventListener = VFSChangeListener | VFSDeleteListener;
 
 export interface Stats {
   isFile(): boolean;
@@ -115,6 +117,8 @@ export class VirtualFS {
   /**
    * Add event listener (for change notifications to workers)
    */
+  on(event: 'change', listener: VFSChangeListener): this;
+  on(event: 'delete', listener: VFSDeleteListener): this;
   on(event: string, listener: VFSEventListener): this {
     if (!this.eventListeners.has(event)) {
       this.eventListeners.set(event, new Set());
@@ -126,6 +130,8 @@ export class VirtualFS {
   /**
    * Remove event listener
    */
+  off(event: 'change', listener: VFSChangeListener): this;
+  off(event: 'delete', listener: VFSDeleteListener): this;
   off(event: string, listener: VFSEventListener): this {
     const listeners = this.eventListeners.get(event);
     if (listeners) {
@@ -137,12 +143,14 @@ export class VirtualFS {
   /**
    * Emit event to listeners
    */
+  private emit(event: 'change', path: string, content: string): void;
+  private emit(event: 'delete', path: string): void;
   private emit(event: string, ...args: unknown[]): void {
     const listeners = this.eventListeners.get(event);
     if (listeners) {
       for (const listener of listeners) {
         try {
-          listener(...args);
+          (listener as (...args: unknown[]) => void)(...args);
         } catch (err) {
           console.error('Error in VFS event listener:', err);
         }

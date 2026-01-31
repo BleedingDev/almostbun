@@ -12,19 +12,7 @@ const isBrowser = typeof window !== 'undefined' &&
   typeof window.navigator !== 'undefined' &&
   'serviceWorker' in window.navigator;
 
-// Type for esbuild module
-type EsbuildModule = {
-  transform: (code: string, options: unknown) => Promise<{ code: string; map: string }>;
-  initialize: (options: unknown) => Promise<void>;
-};
-
-// Use window to store esbuild singleton
-declare global {
-  interface Window {
-    __esbuild?: EsbuildModule;
-    __esbuildInitPromise?: Promise<void>;
-  }
-}
+// Window.__esbuild type is declared in src/types/external.d.ts
 
 /**
  * Initialize esbuild-wasm for browser transforms
@@ -73,7 +61,7 @@ async function initEsbuild(): Promise<void> {
   return window.__esbuildInitPromise;
 }
 
-function getEsbuild(): EsbuildModule | undefined {
+function getEsbuild(): typeof import('esbuild-wasm') | undefined {
   return isBrowser ? window.__esbuild : undefined;
 }
 
@@ -1352,11 +1340,11 @@ export class NextDevServer extends DevServer {
       fn(exports, require, module, process);
 
       // Get the handler - check both module.exports and module.exports.default
-      let handler = module.exports.default || module.exports;
+      let handler: unknown = module.exports.default || module.exports;
 
       // If handler is still an object with a default property, unwrap it
       if (typeof handler === 'object' && handler !== null && 'default' in handler) {
-        handler = (handler as Record<string, unknown>).default;
+        handler = (handler as { default: unknown }).default;
       }
 
       if (typeof handler !== 'function') {
@@ -1364,7 +1352,7 @@ export class NextDevServer extends DevServer {
       }
 
       // Call the handler - it may be async
-      const result = handler(req, res);
+      const result = (handler as (req: unknown, res: unknown) => unknown)(req, res);
 
       // If the handler returns a promise, wait for it
       if (result instanceof Promise) {

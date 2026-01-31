@@ -128,10 +128,10 @@ export const promises = {
     });
   },
   resolve: (hostname: string) => {
-    return new Promise<string[]>((resolve, reject) => {
+    return new Promise<string[]>((promiseResolve, promiseReject) => {
       resolve(hostname, (err, addresses) => {
-        if (err) reject(err);
-        else resolve(addresses || []);
+        if (err) promiseReject(err);
+        else promiseResolve(addresses || []);
       });
     });
   },

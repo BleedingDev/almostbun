@@ -10,19 +10,7 @@ import { VirtualFS } from './virtual-fs';
 // Check if we're in a browser environment
 const isBrowser = typeof window !== 'undefined';
 
-// Type for esbuild module
-type EsbuildModule = {
-  transform: (code: string, options: unknown) => Promise<{ code: string }>;
-  initialize: (options: unknown) => Promise<void>;
-};
-
-// Use window to store/access esbuild singleton (shared with next-dev-server)
-declare global {
-  interface Window {
-    __esbuild?: EsbuildModule;
-    __esbuildInitPromise?: Promise<void>;
-  }
-}
+// Window.__esbuild type is declared in src/types/external.d.ts
 
 /**
  * Initialize esbuild-wasm (reuses existing instance if already initialized)

@@ -76,6 +76,8 @@ export interface Process {
   eventNames: () => string[];
   setMaxListeners: (n: number) => Process;
   getMaxListeners: () => number;
+  // Internal debug counter
+  _cwdCallCount?: number;
 }
 
 // Helper to create a stream-like object with EventEmitter methods
@@ -128,21 +130,30 @@ function createProcessStream(
     setEncoding(_encoding: string) {
       return stream;
     },
+    // Default write implementation (no-op for readable streams)
+    write(_data: string | Buffer, _encoding?: string, callback?: () => void) {
+      if (callback) queueMicrotask(callback);
+      return true;
+    },
+    end(_data?: string, callback?: () => void) {
+      if (callback) queueMicrotask(callback);
+    },
+    // Default read implementation (for stdin)
+    read() {
+      return null;
+    },
+    setRawMode(_mode: boolean) {
+      return stream;
+    },
   };
 
+  // Override write for actual writable streams
   if (isWritable && writeImpl) {
     stream.write = (data: string | Buffer, _encoding?: string, callback?: () => void) => {
       const result = writeImpl(typeof data === 'string' ? data : data.toString());
       if (callback) queueMicrotask(callback);
       return result;
     };
-    stream.end = (_data?: string, callback?: () => void) => {
-      if (callback) queueMicrotask(callback);
-    };
-  } else {
-    // stdin
-    stream.read = () => null;
-    stream.setRawMode = (_mode: boolean) => stream;
   }
 
   return stream;
@@ -223,17 +234,22 @@ export function createProcess(options?: {
 
     stdin: createProcessStream(false) as ProcessReadableStream,
 
-    hrtime(time?: [number, number]): [number, number] {
-      const now = performance.now();
-      const seconds = Math.floor(now / 1000);
-      const nanoseconds = Math.floor((now % 1000) * 1e6);
-      if (time) {
-        const diffSeconds = seconds - time[0];
-        const diffNanos = nanoseconds - time[1];
-        return [diffSeconds, diffNanos];
+    hrtime: Object.assign(
+      function hrtime(time?: [number, number]): [number, number] {
+        const now = performance.now();
+        const seconds = Math.floor(now / 1000);
+        const nanoseconds = Math.floor((now % 1000) * 1e6);
+        if (time) {
+          const diffSeconds = seconds - time[0];
+          const diffNanos = nanoseconds - time[1];
+          return [diffSeconds, diffNanos];
+        }
+        return [seconds, nanoseconds];
+      },
+      {
+        bigint: (): bigint => BigInt(Math.floor(performance.now() * 1e6)),
       }
-      return [seconds, nanoseconds];
-    },
+    ),
 
     memoryUsage() {
       // Return mock values since we can't access real memory in browser
@@ -319,11 +335,6 @@ export function createProcess(options?: {
     getMaxListeners(): number {
       return emitter.getMaxListeners();
     },
-  };
-
-  // Add hrtime.bigint
-  (proc.hrtime as { bigint: () => bigint }).bigint = () => {
-    return BigInt(Math.floor(performance.now() * 1e6));
   };
 
   return proc;

@@ -17,6 +17,8 @@ export interface FsShim {
   existsSync(path: string): boolean;
   mkdirSync(path: string, options?: { recursive?: boolean }): void;
   readdirSync(path: string): string[];
+  readdirSync(path: string, options: { withFileTypes: true }): Dirent[];
+  readdirSync(path: string, options?: { withFileTypes?: boolean; encoding?: string } | string): string[] | Dirent[];
   statSync(path: string): Stats;
   lstatSync(path: string): Stats;
   fstatSync(fd: number): Stats;
@@ -308,17 +310,18 @@ export function createFsShim(vfs: VirtualFS, getCwd?: () => string): FsShim {
         }
       });
     },
-    stat(pathLike: unknown): Promise<Stats> {
+    stat(pathLike: string | unknown): Promise<Stats> {
       return new Promise((resolve, reject) => {
         try {
-          resolve(vfs.statSync(resolvePath(pathLike)));
+          const path = typeof pathLike === 'string' ? pathLike : resolvePath(pathLike);
+          resolve(vfs.statSync(path));
         } catch (err) {
           reject(err);
         }
       });
     },
     lstat(pathLike: unknown): Promise<Stats> {
-      return this.stat(pathLike);
+      return this.stat(resolvePath(pathLike));
     },
     readdir(pathLike: unknown): Promise<string[]> {
       return new Promise((resolve, reject) => {
@@ -794,7 +797,7 @@ export function createFsShim(vfs: VirtualFS, getCwd?: () => string): FsShim {
 
     promises,
     constants,
-  };
+  } as FsShim;
 }
 
 export default createFsShim;

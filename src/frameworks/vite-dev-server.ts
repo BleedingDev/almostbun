@@ -13,20 +13,7 @@ const isBrowser = typeof window !== 'undefined' &&
   typeof window.navigator !== 'undefined' &&
   'serviceWorker' in window.navigator;
 
-// Type for esbuild module
-type EsbuildModule = {
-  transform: (code: string, options: unknown) => Promise<{ code: string; map: string }>;
-  initialize: (options: unknown) => Promise<void>;
-};
-
-// Use window to store esbuild singleton to survive HMR reloads
-// Module-level variables get reset when the module is reimported
-declare global {
-  interface Window {
-    __esbuild?: EsbuildModule;
-    __esbuildInitPromise?: Promise<void>;
-  }
-}
+// Window.__esbuild type is declared in src/types/external.d.ts
 
 /**
  * Initialize esbuild-wasm for browser transforms
@@ -83,7 +70,7 @@ async function initEsbuild(): Promise<void> {
 /**
  * Get the esbuild instance (after initialization)
  */
-function getEsbuild(): EsbuildModule | undefined {
+function getEsbuild(): typeof import('esbuild-wasm') | undefined {
   return isBrowser ? window.__esbuild : undefined;
 }
 

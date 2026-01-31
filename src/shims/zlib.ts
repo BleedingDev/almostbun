@@ -7,10 +7,11 @@ import { Buffer } from './stream';
 import pako from 'pako';
 
 // Brotli WASM instance - loaded lazily
-let brotliModule: { compress: (data: Uint8Array) => Uint8Array; decompress: (data: Uint8Array) => Uint8Array } | null = null;
-let brotliLoadPromise: Promise<typeof brotliModule> | null = null;
+type BrotliModule = { compress: (data: Uint8Array) => Uint8Array; decompress: (data: Uint8Array) => Uint8Array };
+let brotliModule: BrotliModule | null = null;
+let brotliLoadPromise: Promise<BrotliModule | null> | null = null;
 
-async function loadBrotli(): Promise<typeof brotliModule> {
+async function loadBrotli(): Promise<BrotliModule | null> {
   if (brotliModule) return brotliModule;
   if (!brotliLoadPromise) {
     brotliLoadPromise = (async () => {

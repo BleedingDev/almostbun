@@ -164,13 +164,13 @@ const events = EventEmitter as typeof EventEmitter & {
 events.EventEmitter = EventEmitter;
 events.once = async (emitter: EventEmitter, event: string): Promise<unknown[]> => {
   return new Promise((resolve, reject) => {
-    const onEvent = (...args: unknown[]) => {
+    const onEvent: EventListener = (...args: unknown[]) => {
       emitter.removeListener('error', onError);
       resolve(args);
     };
-    const onError = (err: Error) => {
+    const onError: EventListener = (...args: unknown[]) => {
       emitter.removeListener(event, onEvent);
-      reject(err);
+      reject(args[0] as Error);
     };
     emitter.once(event, onEvent);
     emitter.once('error', onError);

@@ -3,7 +3,7 @@
  * Basic Socket and Server classes for virtual networking
  */
 
-import { EventEmitter } from './events';
+import { EventEmitter, EventListener } from './events';
 import { Duplex, Buffer } from './stream';
 
 export interface AddressInfo {
@@ -193,7 +193,7 @@ export class Server extends EventEmitter {
     }
 
     if (listener) {
-      this.on('connection', listener);
+      this.on('connection', listener as EventListener);
     }
   }
 

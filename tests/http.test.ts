@@ -563,7 +563,7 @@ describe('HTTP Client', () => {
     it('should auto-call end()', () => {
       const req = get({ hostname: 'example.com', path: '/' });
 
-      expect((req as any)._ended).toBe(true);
+      expect((req as any)._requestEnded).toBe(true);
     });
   });
 

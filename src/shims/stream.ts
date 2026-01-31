@@ -6,7 +6,7 @@
 import { EventEmitter } from './events';
 
 export class Readable extends EventEmitter {
-  private _buffer: Buffer[] = [];
+  private _buffer: Uint8Array[] = [];
   private _ended: boolean = false;
   private _flowing: boolean = false;
   private _endEmitted: boolean = false;
@@ -48,7 +48,7 @@ export class Readable extends EventEmitter {
     return this.on(event, listener);
   }
 
-  push(chunk: Buffer | string | null): boolean {
+  push(chunk: Uint8Array | string | null): boolean {
     if (chunk === null) {
       this._ended = true;
       this.readableEnded = true;
@@ -98,7 +98,7 @@ export class Readable extends EventEmitter {
     }
 
     // Read specific size
-    const chunks: Buffer[] = [];
+    const chunks: Uint8Array[] = [];
     let remaining = size;
 
     while (remaining > 0 && this._buffer.length > 0) {
@@ -113,7 +113,7 @@ export class Readable extends EventEmitter {
       }
     }
 
-    return chunks.length > 0 ? Buffer.concat(chunks) : null;
+    return chunks.length > 0 ? Buffer.concat(chunks as BufferPolyfill[]) : null;
   }
 
   resume(): this {
@@ -133,8 +133,8 @@ export class Readable extends EventEmitter {
   }
 
   pipe<T extends Writable>(destination: T): T {
-    this.on('data', (chunk) => {
-      destination.write(chunk);
+    this.on('data', (chunk: unknown) => {
+      destination.write(chunk as Uint8Array | string);
     });
 
     this.on('end', () => {
@@ -200,7 +200,7 @@ export class Readable extends EventEmitter {
 }
 
 export class Writable extends EventEmitter {
-  private _chunks: Buffer[] = [];
+  private _chunks: Uint8Array[] = [];
   private _ended: boolean = false;
   writable: boolean = true;
   writableEnded: boolean = false;
@@ -211,7 +211,7 @@ export class Writable extends EventEmitter {
   }
 
   write(
-    chunk: Buffer | string,
+    chunk: Uint8Array | string,
     encodingOrCallback?: string | ((error?: Error | null) => void),
     callback?: (error?: Error | null) => void
   ): boolean {
@@ -237,14 +237,14 @@ export class Writable extends EventEmitter {
   }
 
   end(
-    chunkOrCallback?: Buffer | string | (() => void),
+    chunkOrCallback?: Uint8Array | string | (() => void),
     encodingOrCallback?: string | (() => void),
     callback?: () => void
   ): this {
     if (typeof chunkOrCallback === 'function') {
       callback = chunkOrCallback;
     } else if (chunkOrCallback !== undefined) {
-      this.write(chunkOrCallback as Buffer | string);
+      this.write(chunkOrCallback as Uint8Array | string);
     }
 
     if (typeof encodingOrCallback === 'function') {
@@ -483,7 +483,29 @@ declare global {
 }
 
 class BufferPolyfill extends Uint8Array {
-  static from(data: string | ArrayBuffer | Uint8Array | number[], encoding?: string): BufferPolyfill {
+  // BYTES_PER_ELEMENT for TypedArray compatibility
+  static readonly BYTES_PER_ELEMENT = 1;
+
+  // Overloads for Buffer.from compatibility
+  static from(arrayLike: ArrayLike<number>): BufferPolyfill;
+  static from<T>(arrayLike: ArrayLike<T>, mapfn: (v: T, k: number) => number, thisArg?: unknown): BufferPolyfill;
+  static from(data: string, encoding?: string): BufferPolyfill;
+  static from(data: ArrayBuffer | Uint8Array): BufferPolyfill;
+  static from(data: Iterable<number>): BufferPolyfill;
+  static from(
+    value: string | ArrayBuffer | Uint8Array | number[] | ArrayLike<number> | Iterable<number>,
+    encodingOrMapfn?: string | ((v: unknown, k: number) => number),
+    thisArg?: unknown
+  ): BufferPolyfill {
+    // Handle Uint8Array.from signature (mapfn, thisArg)
+    if (typeof encodingOrMapfn === 'function') {
+      const arrayLike = value as ArrayLike<number>;
+      const mapped = Array.from(arrayLike, encodingOrMapfn as (v: number, k: number) => number, thisArg);
+      return new BufferPolyfill(mapped);
+    }
+
+    const data = value as string | ArrayBuffer | Uint8Array | number[];
+    const encoding = encodingOrMapfn as string | undefined;
     if (Array.isArray(data)) {
       return new BufferPolyfill(data);
     }
@@ -723,6 +745,47 @@ class BufferPolyfill extends Uint8Array {
     return offset + 4;
   }
 
+  // Lowercase aliases for UInt methods (Node.js Buffer API compatibility)
+  readUint8(offset: number): number {
+    return this.readUInt8(offset);
+  }
+
+  readUint16BE(offset: number): number {
+    return this.readUInt16BE(offset);
+  }
+
+  readUint16LE(offset: number): number {
+    return this.readUInt16LE(offset);
+  }
+
+  readUint32BE(offset: number): number {
+    return this.readUInt32BE(offset);
+  }
+
+  readUint32LE(offset: number): number {
+    return this.readUInt32LE(offset);
+  }
+
+  writeUint8(value: number, offset: number): number {
+    return this.writeUInt8(value, offset);
+  }
+
+  writeUint16BE(value: number, offset: number): number {
+    return this.writeUInt16BE(value, offset);
+  }
+
+  writeUint16LE(value: number, offset: number): number {
+    return this.writeUInt16LE(value, offset);
+  }
+
+  writeUint32BE(value: number, offset: number): number {
+    return this.writeUInt32BE(value, offset);
+  }
+
+  writeUint32LE(value: number, offset: number): number {
+    return this.writeUInt32LE(value, offset);
+  }
+
   // Signed integer methods
   readInt8(offset: number): number {
     const val = this[offset];
@@ -841,6 +904,23 @@ class BufferPolyfill extends Uint8Array {
     return this.writeBigUInt64BE(unsigned, offset);
   }
 
+  // Lowercase aliases for BigInt methods (Node.js Buffer API compatibility)
+  readBigUint64LE(offset: number): bigint {
+    return this.readBigUInt64LE(offset);
+  }
+
+  readBigUint64BE(offset: number): bigint {
+    return this.readBigUInt64BE(offset);
+  }
+
+  writeBigUint64LE(value: bigint, offset: number): number {
+    return this.writeBigUInt64LE(value, offset);
+  }
+
+  writeBigUint64BE(value: bigint, offset: number): number {
+    return this.writeBigUInt64BE(value, offset);
+  }
+
   // Float methods
   readFloatLE(offset: number): number {
     const view = new DataView(this.buffer, this.byteOffset + offset, 4);
@@ -885,11 +965,153 @@ class BufferPolyfill extends Uint8Array {
     view.setFloat64(0, value, false);
     return offset + 8;
   }
+
+  // Variable-length unsigned integer methods
+  readUIntLE(offset: number, byteLength: number): number {
+    let val = 0;
+    let mul = 1;
+    for (let i = 0; i < byteLength; i++) {
+      val += this[offset + i] * mul;
+      mul *= 0x100;
+    }
+    return val;
+  }
+
+  readUintLE(offset: number, byteLength: number): number {
+    return this.readUIntLE(offset, byteLength);
+  }
+
+  readUIntBE(offset: number, byteLength: number): number {
+    let val = 0;
+    let mul = 1;
+    for (let i = byteLength - 1; i >= 0; i--) {
+      val += this[offset + i] * mul;
+      mul *= 0x100;
+    }
+    return val;
+  }
+
+  readUintBE(offset: number, byteLength: number): number {
+    return this.readUIntBE(offset, byteLength);
+  }
+
+  readIntLE(offset: number, byteLength: number): number {
+    let val = this.readUIntLE(offset, byteLength);
+    const limit = Math.pow(2, (byteLength * 8) - 1);
+    if (val >= limit) {
+      val -= Math.pow(2, byteLength * 8);
+    }
+    return val;
+  }
+
+  readIntBE(offset: number, byteLength: number): number {
+    let val = this.readUIntBE(offset, byteLength);
+    const limit = Math.pow(2, (byteLength * 8) - 1);
+    if (val >= limit) {
+      val -= Math.pow(2, byteLength * 8);
+    }
+    return val;
+  }
+
+  writeUIntLE(value: number, offset: number, byteLength: number): number {
+    let val = value;
+    for (let i = 0; i < byteLength; i++) {
+      this[offset + i] = val & 0xff;
+      val = Math.floor(val / 0x100);
+    }
+    return offset + byteLength;
+  }
+
+  writeUintLE(value: number, offset: number, byteLength: number): number {
+    return this.writeUIntLE(value, offset, byteLength);
+  }
+
+  writeUIntBE(value: number, offset: number, byteLength: number): number {
+    let val = value;
+    for (let i = byteLength - 1; i >= 0; i--) {
+      this[offset + i] = val & 0xff;
+      val = Math.floor(val / 0x100);
+    }
+    return offset + byteLength;
+  }
+
+  writeUintBE(value: number, offset: number, byteLength: number): number {
+    return this.writeUIntBE(value, offset, byteLength);
+  }
+
+  writeIntLE(value: number, offset: number, byteLength: number): number {
+    let val = value;
+    if (val < 0) {
+      val += Math.pow(2, byteLength * 8);
+    }
+    return this.writeUIntLE(val, offset, byteLength);
+  }
+
+  writeIntBE(value: number, offset: number, byteLength: number): number {
+    let val = value;
+    if (val < 0) {
+      val += Math.pow(2, byteLength * 8);
+    }
+    return this.writeUIntBE(val, offset, byteLength);
+  }
+
+  // Swap methods
+  swap16(): this {
+    const len = this.length;
+    if (len % 2 !== 0) {
+      throw new RangeError('Buffer size must be a multiple of 16-bits');
+    }
+    for (let i = 0; i < len; i += 2) {
+      const a = this[i];
+      this[i] = this[i + 1];
+      this[i + 1] = a;
+    }
+    return this;
+  }
+
+  swap32(): this {
+    const len = this.length;
+    if (len % 4 !== 0) {
+      throw new RangeError('Buffer size must be a multiple of 32-bits');
+    }
+    for (let i = 0; i < len; i += 4) {
+      const a = this[i];
+      const b = this[i + 1];
+      this[i] = this[i + 3];
+      this[i + 1] = this[i + 2];
+      this[i + 2] = b;
+      this[i + 3] = a;
+    }
+    return this;
+  }
+
+  swap64(): this {
+    const len = this.length;
+    if (len % 8 !== 0) {
+      throw new RangeError('Buffer size must be a multiple of 64-bits');
+    }
+    for (let i = 0; i < len; i += 8) {
+      const a = this[i];
+      const b = this[i + 1];
+      const c = this[i + 2];
+      const d = this[i + 3];
+      this[i] = this[i + 7];
+      this[i + 1] = this[i + 6];
+      this[i + 2] = this[i + 5];
+      this[i + 3] = this[i + 4];
+      this[i + 4] = d;
+      this[i + 5] = c;
+      this[i + 6] = b;
+      this[i + 7] = a;
+    }
+    return this;
+  }
 }
 
 // Set global Buffer if not defined
 if (typeof globalThis.Buffer === 'undefined') {
-  (globalThis as unknown as { Buffer: typeof BufferPolyfill }).Buffer = BufferPolyfill as unknown as typeof Buffer;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (globalThis as any).Buffer = BufferPolyfill;
 }
 
 export { BufferPolyfill as Buffer };

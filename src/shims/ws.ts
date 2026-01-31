@@ -229,7 +229,7 @@ export class WebSocket extends EventEmitter {
   _receiveMessage(data: unknown): void {
     const msgEvent = new MessageEventPolyfill('message', { data });
     this.emit('message', msgEvent);
-    if (this.onmessage) this.onmessage(msgEvent);
+    if (this.onmessage) this.onmessage(msgEvent as unknown as MessageEvent);
   }
 }
 

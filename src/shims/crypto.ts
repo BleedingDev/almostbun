@@ -31,7 +31,7 @@ export function randomInt(min: number, max?: number): number {
   return min + (array[0] % range);
 }
 
-export function getRandomValues<T extends ArrayBufferView | null>(array: T): T {
+export function getRandomValues<T extends ArrayBufferView>(array: T): T {
   return crypto.getRandomValues(array);
 }
 
@@ -68,7 +68,8 @@ class Hash {
 
   async digestAsync(encoding?: string): Promise<string | Buffer> {
     const combined = concatBuffers(this.data);
-    const hashBuffer = await crypto.subtle.digest(this.algorithm, combined);
+    const dataBuffer = new Uint8Array(combined).buffer as ArrayBuffer;
+    const hashBuffer = await crypto.subtle.digest(this.algorithm, dataBuffer);
     return encodeResult(new Uint8Array(hashBuffer), encoding);
   }
 
@@ -110,16 +111,18 @@ class Hmac {
 
   async digestAsync(encoding?: string): Promise<string | Buffer> {
     const combined = concatBuffers(this.data);
+    const keyBuffer = new Uint8Array(this.key).buffer as ArrayBuffer;
+    const dataBuffer = new Uint8Array(combined).buffer as ArrayBuffer;
 
     const cryptoKey = await crypto.subtle.importKey(
       'raw',
-      this.key,
+      keyBuffer,
       { name: 'HMAC', hash: this.algorithm },
       false,
       ['sign']
     );
 
-    const signature = await crypto.subtle.sign('HMAC', cryptoKey, combined);
+    const signature = await crypto.subtle.sign('HMAC', cryptoKey, dataBuffer);
     return encodeResult(new Uint8Array(signature), encoding);
   }
 
@@ -147,12 +150,16 @@ async function pbkdf2Async(
   keylen: number,
   digest: string
 ): Promise<Buffer> {
-  const passwordBuffer = typeof password === 'string' ? Buffer.from(password) : password;
-  const saltBuffer = typeof salt === 'string' ? Buffer.from(salt) : salt;
+  const passwordBuffer = typeof password === 'string' ? Buffer.from(password) : (password instanceof Uint8Array ? password : Buffer.from(password));
+  const saltBuffer = typeof salt === 'string' ? Buffer.from(salt) : (salt instanceof Uint8Array ? salt : Buffer.from(salt));
+
+  // Convert to ArrayBuffer for WebCrypto compatibility
+  const passwordArrayBuffer = new Uint8Array(passwordBuffer).buffer as ArrayBuffer;
+  const saltArrayBuffer = new Uint8Array(saltBuffer).buffer as ArrayBuffer;
 
   const key = await crypto.subtle.importKey(
     'raw',
-    passwordBuffer,
+    passwordArrayBuffer,
     'PBKDF2',
     false,
     ['deriveBits']
@@ -161,7 +168,7 @@ async function pbkdf2Async(
   const derivedBits = await crypto.subtle.deriveBits(
     {
       name: 'PBKDF2',
-      salt: saltBuffer,
+      salt: saltArrayBuffer,
       iterations,
       hash: normalizeHashAlgorithm(digest),
     },
@@ -680,12 +687,13 @@ async function signAsync(algorithm: string, data: Uint8Array, keyInfo: KeyInfo):
     // Import the key
     const cryptoKey = await importKey(keyInfo, webCryptoAlg, ['sign']);
 
-    // Sign the data
+    // Sign the data - convert to ArrayBuffer for WebCrypto compatibility
     const signatureAlg = webCryptoAlg.hash
       ? { name: webCryptoAlg.name, hash: webCryptoAlg.hash }
       : { name: webCryptoAlg.name };
 
-    const signature = await crypto.subtle.sign(signatureAlg, cryptoKey, data);
+    const dataBuffer = new Uint8Array(data).buffer as ArrayBuffer;
+    const signature = await crypto.subtle.sign(signatureAlg, cryptoKey, dataBuffer);
     return Buffer.from(signature);
   } catch (error) {
     // Fallback to sync implementation
@@ -709,7 +717,10 @@ async function verifyAsync(
       ? { name: webCryptoAlg.name, hash: webCryptoAlg.hash }
       : { name: webCryptoAlg.name };
 
-    return await crypto.subtle.verify(verifyAlg, cryptoKey, signature, data);
+    // Convert to ArrayBuffer for WebCrypto compatibility
+    const sigBuffer = new Uint8Array(signature).buffer as ArrayBuffer;
+    const dataBuffer = new Uint8Array(data).buffer as ArrayBuffer;
+    return await crypto.subtle.verify(verifyAlg, cryptoKey, sigBuffer, dataBuffer);
   } catch (error) {
     console.warn('WebCrypto verify failed, using fallback:', error);
     return verifySync(algorithm, data, keyInfo, signature);
@@ -753,6 +764,8 @@ async function importKey(
   }
 
   const keyData = keyInfo.keyData;
+  // Convert Uint8Array to ArrayBuffer for WebCrypto compatibility
+  const keyBuffer = new Uint8Array(keyData).buffer as ArrayBuffer;
 
   // Determine import format
   if (keyInfo.format === 'pem') {
@@ -768,7 +781,7 @@ async function importKey(
 
     return await crypto.subtle.importKey(
       format,
-      keyData,
+      keyBuffer,
       importAlg,
       true,
       usages
@@ -779,7 +792,7 @@ async function importKey(
   if (keyInfo.type === 'secret') {
     return await crypto.subtle.importKey(
       'raw',
-      keyData,
+      keyBuffer,
       { name: algorithm.name, hash: algorithm.hash },
       true,
       usages
