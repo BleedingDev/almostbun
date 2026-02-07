@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>API Reference — almostnode docs</title>
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+
+<div class="topbar">
+  <label class="menu-toggle" for="sidebar-check">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+  </label>
+  <a href="../" class="topbar-logo"><span>almostnode</span></a>
+  <span class="topbar-sep">/</span>
+  <span class="topbar-section">Docs</span>
+  <ul class="topbar-links">
+    <li><a href="https://github.com/Macaly/almostnode">GitHub</a></li>
+    <li><a href="https://www.npmjs.com/package/almostnode">npm</a></li>
+  </ul>
+</div>
+
+<input type="checkbox" id="sidebar-check">
+<div class="layout">
+  <nav class="sidebar">
+    <div class="sidebar-group">
+      <div class="sidebar-label">Guide</div>
+      <a href="./">Getting Started</a>
+      <a href="./core-concepts.html">Core Concepts</a>
+    </div>
+    <div class="sidebar-group">
+      <div class="sidebar-label">Frameworks</div>
+      <a href="./nextjs-guide.html">Next.js</a>
+      <a href="./vite-guide.html">Vite</a>
+    </div>
+    <div class="sidebar-group">
+      <div class="sidebar-label">Reference</div>
+      <a href="./api-reference.html" class="active">API Reference</a>
+    </div>
+  </nav>
+
+  <main class="content">
+    <h1>API Reference</h1>
+    <p class="lead">Complete method signatures for all almostnode classes and functions.</p>
+
+    <!-- createContainer -->
+    <h2>createContainer()</h2>
+    <div class="method-sig">
+      <span class="fn">createContainer</span>(<span class="ty">options</span>?: <span class="ty">ContainerOptions</span>): <span class="op">{</span> vfs, runtime, npm, serverBridge, execute, runFile, on <span class="op">}</span>
+    </div>
+    <p>Creates a complete container environment with a virtual filesystem, runtime, package manager, and server bridge.</p>
+
+    <h4>Options</h4>
+    <table>
+      <thead><tr><th>Property</th><th>Type</th><th>Description</th></tr></thead>
+      <tbody>
+        <tr><td><code>cwd</code></td><td><code>string</code></td><td>Working directory (default: <code>'/'</code>)</td></tr>
+        <tr><td><code>env</code></td><td><code>Record&lt;string, string&gt;</code></td><td>Environment variables for <code>process.env</code></td></tr>
+        <tr><td><code>onConsole</code></td><td><code>(level, ...args) =&gt; void</code></td><td>Callback for console output</td></tr>
+        <tr><td><code>baseUrl</code></td><td><code>string</code></td><td>Base URL for the server bridge</td></tr>
+        <tr><td><code>onServerReady</code></td><td><code>(port) =&gt; void</code></td><td>Called when a server starts listening</td></tr>
+      </tbody>
+    </table>
+
+    <h4>Returns</h4>
+    <table>
+      <thead><tr><th>Property</th><th>Type</th><th>Description</th></tr></thead>
+      <tbody>
+        <tr><td><code>vfs</code></td><td><code>VirtualFS</code></td><td>Virtual filesystem instance</td></tr>
+        <tr><td><code>runtime</code></td><td><code>Runtime</code></td><td>Code execution runtime</td></tr>
+        <tr><td><code>npm</code></td><td><code>PackageManager</code></td><td>Package manager for installing npm packages</td></tr>
+        <tr><td><code>serverBridge</code></td><td><code>ServerBridge</code></td><td>Service worker bridge</td></tr>
+        <tr><td><code>execute</code></td><td><code>(code) =&gt; result</code></td><td>Shorthand for <code>runtime.execute()</code></td></tr>
+        <tr><td><code>runFile</code></td><td><code>(path) =&gt; result</code></td><td>Shorthand for <code>runtime.runFile()</code></td></tr>
+        <tr><td><code>on</code></td><td><code>(event, listener) =&gt; void</code></td><td>Listen for events (e.g. <code>'server-ready'</code>)</td></tr>
+      </tbody>
+    </table>
+
+    <!-- VirtualFS -->
+    <h2>VirtualFS</h2>
+    <div class="method-sig">
+      <span class="kw">new</span> <span class="fn">VirtualFS</span>()
+    </div>
+    <p>In-memory POSIX-compatible filesystem.</p>
+
+    <h3>File Operations</h3>
+    <table>
+      <thead><tr><th>Method</th><th>Signature</th><th>Description</th></tr></thead>
+      <tbody>
+        <tr><td><code>writeFileSync</code></td><td><code>(path: string, data: string | Uint8Array): void</code></td><td>Write file (creates parent dirs)</td></tr>
+        <tr><td><code>readFileSync</code></td><td><code>(path: string, encoding?: 'utf8'): string | Uint8Array</code></td><td>Read file contents</td></tr>
+        <tr><td><code>existsSync</code></td><td><code>(path: string): boolean</code></td><td>Check if path exists</td></tr>
+        <tr><td><code>statSync</code></td><td><code>(path: string): Stats</code></td><td>Get file metadata</td></tr>
+        <tr><td><code>unlinkSync</code></td><td><code>(path: string): void</code></td><td>Delete a file</td></tr>
+        <tr><td><code>renameSync</code></td><td><code>(oldPath: string, newPath: string): void</code></td><td>Move or rename a file</td></tr>
+        <tr><td><code>copyFileSync</code></td><td><code>(src: string, dest: string): void</code></td><td>Copy a file</td></tr>
+        <tr><td><code>accessSync</code></td><td><code>(path: string, mode?: number): void</code></td><td>Check file access (throws if not found)</td></tr>
+        <tr><td><code>realpathSync</code></td><td><code>(path: string): string</code></td><td>Normalize and resolve path</td></tr>
+      </tbody>
+    </table>
+
+    <h3>Directory Operations</h3>
+    <table>
+      <thead><tr><th>Method</th><th>Signature</th><th>Description</th></tr></thead>
+      <tbody>
+        <tr><td><code>mkdirSync</code></td><td><code>(path: string, options?: {recursive?: boolean}): void</code></td><td>Create directory</td></tr>
+        <tr><td><code>readdirSync</code></td><td><code>(path: string): string[]</code></td><td>List directory contents</td></tr>
+        <tr><td><code>rmdirSync</code></td><td><code>(path: string): void</code></td><td>Remove empty directory</td></tr>
+      </tbody>
+    </table>
+
+    <h3>Streams</h3>
+    <table>
+      <thead><tr><th>Method</th><th>Signature</th><th>Description</th></tr></thead>
+      <tbody>
+        <tr><td><code>createReadStream</code></td><td><code>(path: string): ReadStream</code></td><td>Create readable stream</td></tr>
+        <tr><td><code>createWriteStream</code></td><td><code>(path: string): WriteStream</code></td><td>Create writable stream</td></tr>
+      </tbody>
+    </table>
+
+    <h3>Watching & Events</h3>
+    <table>
+      <thead><tr><th>Method</th><th>Signature</th><th>Description</th></tr></thead>
+      <tbody>
+        <tr><td><code>watch</code></td><td><code>(path: string, listener?: (event, filename) =&gt; void): FSWatcher</code></td><td>Watch file or directory for changes</td></tr>
+        <tr><td><code>on</code></td><td><code>(event: 'change' | 'delete', listener): this</code></td><td>Listen for VFS changes globally</td></tr>
+        <tr><td><code>off</code></td><td><code>(event: 'change' | 'delete', listener): this</code></td><td>Remove event listener</td></tr>
+      </tbody>
+    </table>
+
+    <h3>Serialization</h3>
+    <table>
+      <thead><tr><th>Method</th><th>Signature</th><th>Description</th></tr></thead>
+      <tbody>
+        <tr><td><code>toSnapshot</code></td><td><code>(): VFSSnapshot</code></td><td>Serialize entire filesystem</td></tr>
+        <tr><td><code>VirtualFS.fromSnapshot</code></td><td><code>(snapshot: VFSSnapshot): VirtualFS</code></td><td>Restore from snapshot (static)</td></tr>
+      </tbody>
+    </table>
+
+    <!-- Runtime -->
+    <h2>Runtime</h2>
+    <div class="method-sig">
+      <span class="kw">new</span> <span class="fn">Runtime</span>(<span class="ty">vfs</span>: VirtualFS, <span class="ty">options</span>?: RuntimeOptions)
+    </div>
+    <p>Executes JavaScript and TypeScript with CommonJS module resolution and 40+ shimmed Node.js modules.</p>
+
+    <h4>Constructor Options</h4>
+    <table>
+      <thead><tr><th>Property</th><th>Type</th><th>Description</th></tr></thead>
+      <tbody>
+        <tr><td><code>cwd</code></td><td><code>string</code></td><td>Working directory (default: <code>'/'</code>)</td></tr>
+        <tr><td><code>env</code></td><td><code>Record&lt;string, string&gt;</code></td><td>Environment variables</td></tr>
+        <tr><td><code>onConsole</code></td><td><code>(level, ...args) =&gt; void</code></td><td>Console output callback</td></tr>
+      </tbody>
+    </table>
+
+    <h3>Methods</h3>
+    <table>
+      <thead><tr><th>Method</th><th>Signature</th><th>Description</th></tr></thead>
+      <tbody>
+        <tr><td><code>execute</code></td><td><code>(code: string, filename?: string): {exports, module}</code></td><td>Execute code string as a module</td></tr>
+        <tr><td><code>runFile</code></td><td><code>(path: string): {exports, module}</code></td><td>Execute a file from the VFS</td></tr>
+        <tr><td><code>executeAsync</code></td><td><code>(code: string, filename?: string): Promise&lt;result&gt;</code></td><td>Execute code asynchronously</td></tr>
+        <tr><td><code>runFileAsync</code></td><td><code>(path: string): Promise&lt;result&gt;</code></td><td>Execute a file asynchronously</td></tr>
+        <tr><td><code>clearCache</code></td><td><code>(): void</code></td><td>Clear module cache (for HMR)</td></tr>
+        <tr><td><code>getVFS</code></td><td><code>(): VirtualFS</code></td><td>Get the VFS instance</td></tr>
+        <tr><td><code>getProcess</code></td><td><code>(): Process</code></td><td>Get the process shim</td></tr>
+      </tbody>
+    </table>
+
+    <!-- createRuntime -->
+    <h2>createRuntime()</h2>
+    <div class="method-sig">
+      <span class="kw">async</span> <span class="fn">createRuntime</span>(<span class="ty">vfs</span>: VirtualFS, <span class="ty">options</span>?: CreateRuntimeOptions): Promise&lt;IRuntime&gt;
+    </div>
+    <p>Creates a runtime with security isolation. Use this when you need sandboxed or worker-based execution.</p>
+
+    <h4>Options</h4>
+    <table>
+      <thead><tr><th>Property</th><th>Type</th><th>Description</th></tr></thead>
+      <tbody>
+        <tr><td><code>sandbox</code></td><td><code>string</code></td><td>URL for cross-origin sandbox iframe</td></tr>
+        <tr><td><code>dangerouslyAllowSameOrigin</code></td><td><code>boolean</code></td><td>Allow main-thread execution (no isolation)</td></tr>
+        <tr><td><code>useWorker</code></td><td><code>boolean</code></td><td>Execute in a Web Worker</td></tr>
+      </tbody>
+    </table>
+
+    <div class="callout">
+      <div class="callout-title">Security</div>
+      <p>You must provide either a <code>sandbox</code> URL or set <code>dangerouslyAllowSameOrigin: true</code>. The sandbox option is recommended for untrusted code.</p>
+    </div>
+
+    <!-- PackageManager -->
+    <h2>PackageManager</h2>
+    <div class="method-sig">
+      <span class="kw">new</span> <span class="fn">PackageManager</span>(<span class="ty">vfs</span>: VirtualFS, <span class="ty">options</span>?: { cwd?: string })
+    </div>
+    <p>Installs npm packages into the virtual filesystem. Fetches from the npm registry, resolves dependencies, and extracts tarballs.</p>
+
+    <h3>Methods</h3>
+    <table>
+      <thead><tr><th>Method</th><th>Signature</th><th>Description</th></tr></thead>
+      <tbody>
+        <tr><td><code>install</code></td><td><code>(packageSpec: string, options?: InstallOptions): Promise&lt;InstallResult&gt;</code></td><td>Install a package (e.g. <code>'express'</code>, <code>'react@18'</code>)</td></tr>
+        <tr><td><code>installFromPackageJson</code></td><td><code>(options?: InstallOptions): Promise&lt;InstallResult&gt;</code></td><td>Install all dependencies from package.json</td></tr>
+        <tr><td><code>list</code></td><td><code>(): Record&lt;string, string&gt;</code></td><td>Get installed packages and versions</td></tr>
+      </tbody>
+    </table>
+
+    <h4>InstallOptions</h4>
+    <table>
+      <thead><tr><th>Property</th><th>Type</th><th>Description</th></tr></thead>
+      <tbody>
+        <tr><td><code>save</code></td><td><code>boolean</code></td><td>Save to dependencies in package.json</td></tr>
+        <tr><td><code>saveDev</code></td><td><code>boolean</code></td><td>Save to devDependencies</td></tr>
+        <tr><td><code>onProgress</code></td><td><code>(info) =&gt; void</code></td><td>Progress callback</td></tr>
+      </tbody>
+    </table>
+
+    <!-- ServerBridge -->
+    <h2>ServerBridge</h2>
+    <div class="method-sig">
+      <span class="fn">getServerBridge</span>(<span class="ty">options</span>?: BridgeOptions): ServerBridge
+    </div>
+    <p>Get or create the global ServerBridge instance. Connects virtual servers to real browser URLs via a service worker.</p>
+
+    <h3>Methods</h3>
+    <table>
+      <thead><tr><th>Method</th><th>Signature</th><th>Description</th></tr></thead>
+      <tbody>
+        <tr><td><code>initServiceWorker</code></td><td><code>(options?: { swUrl?: string }): Promise&lt;void&gt;</code></td><td>Register and activate the service worker</td></tr>
+        <tr><td><code>registerServer</code></td><td><code>(server, port: number, hostname?: string): void</code></td><td>Register a virtual server on a port</td></tr>
+        <tr><td><code>unregisterServer</code></td><td><code>(port: number): void</code></td><td>Unregister a server</td></tr>
+        <tr><td><code>getServerUrl</code></td><td><code>(port: number): string</code></td><td>Get URL for the virtual server</td></tr>
+        <tr><td><code>getServerPorts</code></td><td><code>(): number[]</code></td><td>Get all registered port numbers</td></tr>
+        <tr><td><code>handleRequest</code></td><td><code>(port, method, url, headers, body?): Promise&lt;Response&gt;</code></td><td>Handle an incoming request directly</td></tr>
+      </tbody>
+    </table>
+
+    <h3>Events</h3>
+    <p>ServerBridge extends EventEmitter and emits:</p>
+    <ul>
+      <li><code>'sw-ready'</code> — service worker is active</li>
+      <li><code>'server-ready'</code> — a server started listening</li>
+      <li><code>'server-registered'</code> — server registered on a port</li>
+      <li><code>'server-unregistered'</code> — server removed from a port</li>
+    </ul>
+
+    <!-- NextDevServer -->
+    <h2>NextDevServer</h2>
+    <div class="method-sig">
+      <span class="kw">new</span> <span class="fn">NextDevServer</span>(<span class="ty">vfs</span>: VirtualFS)
+    </div>
+    <p>A virtual Next.js dev server that supports both App Router and Pages Router, CSS Modules, API routes, dynamic routes, route groups, and HMR via React Refresh.</p>
+    <p>Import from <code>almostnode/next</code>.</p>
+
+    <!-- ViteDevServer -->
+    <h2>ViteDevServer</h2>
+    <div class="method-sig">
+      <span class="kw">new</span> <span class="fn">ViteDevServer</span>(<span class="ty">vfs</span>: VirtualFS)
+    </div>
+    <p>A virtual Vite dev server with React support, JSX/TSX transforms, npm module resolution, and HMR via React Refresh.</p>
+    <p>Import from <code>almostnode/vite</code>.</p>
+
+    <!-- Utility -->
+    <h2>Utility Functions</h2>
+
+    <h3>resetServerBridge()</h3>
+    <div class="method-sig">
+      <span class="fn">resetServerBridge</span>(): <span class="kw">void</span>
+    </div>
+    <p>Reset the global ServerBridge instance. Useful in tests to get a clean state.</p>
+
+    <div class="page-nav">
+      <a href="./vite-guide.html">
+        <div class="label">Previous</div>
+        <div class="title">Vite Guide</div>
+      </a>
+      <div></div>
+    </div>
+  </main>
+</div>
+
+</body>
+</html>

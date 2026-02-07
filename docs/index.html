@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Getting Started — almostnode docs</title>
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+
+<div class="topbar">
+  <label class="menu-toggle" for="sidebar-check">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+  </label>
+  <a href="../" class="topbar-logo"><span>almostnode</span></a>
+  <span class="topbar-sep">/</span>
+  <span class="topbar-section">Docs</span>
+  <ul class="topbar-links">
+    <li><a href="https://github.com/Macaly/almostnode">GitHub</a></li>
+    <li><a href="https://www.npmjs.com/package/almostnode">npm</a></li>
+  </ul>
+</div>
+
+<input type="checkbox" id="sidebar-check">
+<div class="layout">
+  <nav class="sidebar">
+    <div class="sidebar-group">
+      <div class="sidebar-label">Guide</div>
+      <a href="./" class="active">Getting Started</a>
+      <a href="./core-concepts.html">Core Concepts</a>
+    </div>
+    <div class="sidebar-group">
+      <div class="sidebar-label">Frameworks</div>
+      <a href="./nextjs-guide.html">Next.js</a>
+      <a href="./vite-guide.html">Vite</a>
+    </div>
+    <div class="sidebar-group">
+      <div class="sidebar-label">Reference</div>
+      <a href="./api-reference.html">API Reference</a>
+    </div>
+  </nav>
+
+  <main class="content">
+    <h1>Getting Started</h1>
+    <p class="lead">almostnode lets you run Node.js, install npm packages, and start framework dev servers — entirely in the browser.</p>
+
+    <h2>What is almostnode?</h2>
+    <p>almostnode is a JavaScript library that provides a complete Node.js-like environment inside the browser. It includes:</p>
+    <ul>
+      <li>A <strong>virtual filesystem</strong> (VirtualFS) with POSIX-compatible operations</li>
+      <li>A <strong>runtime</strong> that executes JavaScript/TypeScript with 40+ shimmed Node.js modules</li>
+      <li>A <strong>package manager</strong> that installs real npm packages client-side</li>
+      <li>Built-in <strong>Next.js and Vite dev servers</strong> with HMR and file-based routing</li>
+      <li>A <strong>service worker bridge</strong> that makes virtual servers accessible via real URLs</li>
+    </ul>
+
+    <h2>Installation</h2>
+    <pre><code>npm install almostnode</code></pre>
+
+    <h2>Quick Start</h2>
+    <p>The fastest way to get started is with <code>createContainer()</code>. It sets up a virtual filesystem, runtime, and package manager in one call:</p>
+    <pre><code><span class="kw">import</span> <span class="op">{</span> <span class="fn">createContainer</span> <span class="op">}</span> <span class="kw">from</span> <span class="str">'almostnode'</span><span class="op">;</span>
+
+<span class="kw">const</span> <span class="op">{</span> vfs<span class="op">,</span> runtime<span class="op">,</span> npm <span class="op">}</span> <span class="op">=</span> <span class="fn">createContainer</span><span class="op">();</span>
+
+<span class="cm">// Write a file to the virtual filesystem</span>
+vfs<span class="op">.</span><span class="fn">writeFileSync</span><span class="op">(</span><span class="str">'/hello.js'</span><span class="op">,</span> <span class="str">`
+  console.log('Hello from almostnode!');
+`</span><span class="op">);</span>
+
+<span class="cm">// Execute it</span>
+runtime<span class="op">.</span><span class="fn">runFile</span><span class="op">(</span><span class="str">'/hello.js'</span><span class="op">);</span></code></pre>
+
+    <h2>Your First Server</h2>
+    <p>Let's create an HTTP server that runs entirely in the browser:</p>
+    <pre><code><span class="kw">import</span> <span class="op">{</span> <span class="fn">createContainer</span> <span class="op">}</span> <span class="kw">from</span> <span class="str">'almostnode'</span><span class="op">;</span>
+
+<span class="kw">const</span> <span class="op">{</span> vfs<span class="op">,</span> runtime <span class="op">}</span> <span class="op">=</span> <span class="fn">createContainer</span><span class="op">();</span>
+
+vfs<span class="op">.</span><span class="fn">writeFileSync</span><span class="op">(</span><span class="str">'/server.js'</span><span class="op">,</span> <span class="str">`
+  const http = require('http');
+
+  const server = http.createServer((req, res) =&gt; {
+    res.writeHead(200, { 'Content-Type': 'text/html' });
+    res.end('&lt;h1&gt;Hello from the browser!&lt;/h1&gt;');
+  });
+
+  server.listen(3000, () =&gt; {
+    console.log('Server running on port 3000');
+  });
+`</span><span class="op">);</span>
+
+runtime<span class="op">.</span><span class="fn">runFile</span><span class="op">(</span><span class="str">'/server.js'</span><span class="op">);</span></code></pre>
+    <p>The <code>http</code> module is one of 40+ shimmed Node.js modules available out of the box. The server runs in-memory and can be accessed through the service worker bridge.</p>
+
+    <h2>Installing npm Packages</h2>
+    <p>You can install real npm packages at runtime. The package manager fetches packages from the npm registry, resolves dependencies, and extracts tarballs — all in the browser:</p>
+    <pre><code><span class="kw">import</span> <span class="op">{</span> <span class="fn">createContainer</span> <span class="op">}</span> <span class="kw">from</span> <span class="str">'almostnode'</span><span class="op">;</span>
+
+<span class="kw">const</span> <span class="op">{</span> vfs<span class="op">,</span> npm<span class="op">,</span> runtime <span class="op">}</span> <span class="op">=</span> <span class="fn">createContainer</span><span class="op">();</span>
+
+<span class="cm">// Install Express from npm</span>
+<span class="kw">await</span> npm<span class="op">.</span><span class="fn">install</span><span class="op">(</span><span class="str">'express'</span><span class="op">);</span>
+
+vfs<span class="op">.</span><span class="fn">writeFileSync</span><span class="op">(</span><span class="str">'/app.js'</span><span class="op">,</span> <span class="str">`
+  const express = require('express');
+  const app = express();
+
+  app.get('/', (req, res) =&gt; {
+    res.json({ message: 'Express in the browser!' });
+  });
+
+  app.listen(3000);
+`</span><span class="op">);</span>
+
+runtime<span class="op">.</span><span class="fn">runFile</span><span class="op">(</span><span class="str">'/app.js'</span><span class="op">);</span></code></pre>
+
+    <h2>Next Steps</h2>
+    <ul>
+      <li><a href="./core-concepts.html">Core Concepts</a> — understand the architecture: VirtualFS, Runtime, PackageManager, and ServerBridge</li>
+      <li><a href="./nextjs-guide.html">Next.js Guide</a> — run a full Next.js dev server with App Router, HMR, and CSS Modules</li>
+      <li><a href="./vite-guide.html">Vite Guide</a> — set up Vite with React and hot module replacement</li>
+      <li><a href="./api-reference.html">API Reference</a> — full method signatures for every class and function</li>
+    </ul>
+
+    <div class="page-nav">
+      <div></div>
+      <a href="./core-concepts.html" class="next">
+        <div class="label">Next</div>
+        <div class="title">Core Concepts</div>
+      </a>
+    </div>
+  </main>
+</div>
+
+</body>
+</html>
