@@ -856,7 +856,7 @@ triggerHMR('/app/page.tsx', iframe);
 ### Setup
 
 ```bash
-git clone https://github.com/Macaly/almostnode.git
+git clone https://github.com/macaly/almostnode.git
 cd almostnode
 npm install
 ```

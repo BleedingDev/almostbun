@@ -111,7 +111,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added security warning to Quick Start section in README
 - Clarified that `createContainer()` should not be used with untrusted code
 - Added "Running Untrusted Code Securely" example using `createRuntime()` with sandbox
-- Updated repository URLs to point to Macaly/almostnode
+- Updated repository URLs to point to macaly/almostnode
 
 ## [0.2.0] - 2025-01-31
 

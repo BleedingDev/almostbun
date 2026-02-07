@@ -17,11 +17,11 @@
   ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/Macaly/almostnode.git"
+    "url": "https://github.com/macaly/almostnode.git"
   },
-  "homepage": "https://github.com/Macaly/almostnode#readme",
+  "homepage": "https://github.com/macaly/almostnode#readme",
   "bugs": {
-    "url": "https://github.com/Macaly/almostnode/issues"
+    "url": "https://github.com/macaly/almostnode/issues"
   },
   "author": "",
   "engines": {
