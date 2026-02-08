@@ -46,6 +46,10 @@
       <a href="./vite-guide.html">Vite</a>
     </div>
     <div class="sidebar-group">
+      <div class="sidebar-label">Tutorials</div>
+      <a href="./tutorial-editor.html">Editor + Preview</a>
+    </div>
+    <div class="sidebar-group">
       <div class="sidebar-label">Reference</div>
       <a href="./api-reference.html">API Reference</a>
     </div>
@@ -181,20 +185,28 @@ vfs<span class="op">.</span><span class="fn">writeFileSync</span><span class="op
     <p>Classes are scoped with a hash to prevent collisions between components.</p>
 
     <h2>Hot Module Replacement</h2>
-    <p>The dev server supports HMR through React Refresh. When you change a file in the VFS, the server detects it and pushes updates to the browser without a full page reload:</p>
-    <pre><code><span class="cm">// Initial page</span>
-vfs<span class="op">.</span><span class="fn">writeFileSync</span><span class="op">(</span><span class="str">'/app/page.tsx'</span><span class="op">,</span> <span class="str">`
-  export default function Home() {
-    return &lt;h1&gt;Version 1&lt;/h1&gt;;
-  }
-`</span><span class="op">);</span>
+    <p>The dev server supports HMR through React Refresh. Two things are required for HMR to work:</p>
+    <ol>
+      <li>Call <code>devServer.start()</code> — this enables file watching on the VFS</li>
+      <li>Call <code>devServer.setHMRTarget(iframe.contentWindow)</code> — this tells the server where to send updates via <code>postMessage</code></li>
+    </ol>
+    <p>Once both are set up, writing to the VFS triggers HMR automatically:</p>
+    <pre><code><span class="kw">const</span> devServer <span class="op">=</span> <span class="kw">new</span> <span class="fn">NextDevServer</span><span class="op">(</span>vfs<span class="op">,</span> <span class="op">{</span> port<span class="op">:</span> <span class="num">3000</span><span class="op">,</span> root<span class="op">:</span> <span class="str">'/'</span> <span class="op">});</span>
+devServer<span class="op">.</span><span class="fn">start</span><span class="op">();</span> <span class="cm">// Required: enables file watching for HMR</span>
 
-<span class="cm">// Later, update the file — HMR kicks in automatically</span>
+<span class="cm">// After bridge setup and iframe load:</span>
+devServer<span class="op">.</span><span class="fn">setHMRTarget</span><span class="op">(</span>iframe<span class="op">.</span>contentWindow<span class="op">);</span> <span class="cm">// Required: HMR delivery target</span>
+
+<span class="cm">// Now updating a file triggers HMR automatically</span>
 vfs<span class="op">.</span><span class="fn">writeFileSync</span><span class="op">(</span><span class="str">'/app/page.tsx'</span><span class="op">,</span> <span class="str">`
   export default function Home() {
     return &lt;h1&gt;Version 2&lt;/h1&gt;;
   }
 `</span><span class="op">);</span></code></pre>
+    <div class="callout">
+      <div class="callout-title">Important</div>
+      <p>Without <code>devServer.start()</code>, the server won't watch the VFS for changes and HMR updates won't fire. This is the most common cause of HMR not working.</p>
+    </div>
 
     <h2>Configuration</h2>
     <p>You can provide a <code>next.config.js</code> for path aliases and other options:</p>

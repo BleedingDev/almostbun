@@ -457,16 +457,26 @@ function createRequire(
       return null;
     };
 
+    // Apply browser field object remapping for a resolved file within a package
+    const applyBrowserFieldRemap = (resolvedPath: string, pkg: PackageJson, pkgRoot: string): string | null => {
+      if (!pkg.browser || typeof pkg.browser !== 'object') return resolvedPath;
+      const browserMap = pkg.browser as Record<string, string | false>;
+      // Build relative path from package root (e.g., "./lib/node.js")
+      const relPath = './' + pathShim.relative(pkgRoot, resolvedPath);
+      // Also check without extension for common patterns
+      const relPathNoExt = relPath.replace(/\.(js|json|cjs|mjs)$/, '');
+      for (const key of [relPath, relPathNoExt]) {
+        if (key in browserMap) {
+          if (browserMap[key] === false) return null; // Module excluded in browser
+          return tryResolveFile(pathShim.join(pkgRoot, browserMap[key] as string));
+        }
+      }
+      return resolvedPath;
+    };
+
     // Helper to resolve from a node_modules directory
     const tryResolveFromNodeModules = (nodeModulesDir: string, moduleId: string): string | null => {
-      const fullPath = pathShim.join(nodeModulesDir, moduleId);
-
-      // Check if path exists (as file or directory)
-      const resolved = tryResolveFile(fullPath);
-      if (resolved) return resolved;
-
-      // Check if this is a package (has package.json)
-      // For sub-paths like "pkg/sub", we need to find the package root first
+      // Determine the package name and root
       const parts = moduleId.split('/');
       const pkgName = parts[0].startsWith('@') && parts.length > 1
         ? `${parts[0]}/${parts[1]}`  // Scoped package
@@ -475,6 +485,7 @@ function createRequire(
       const pkgRoot = pathShim.join(nodeModulesDir, pkgName);
       const pkgPath = pathShim.join(pkgRoot, 'package.json');
 
+      // Check package.json first — it controls entry points (browser, main, exports)
       const pkg = getParsedPackageJson(pkgPath);
       if (pkg) {
         // Use resolve.exports to handle the exports field
@@ -494,14 +505,26 @@ function createRequire(
           }
         }
 
-        // If this is the package root (no sub-path), use main entry
+        // If this is the package root (no sub-path), use browser/main entry
         if (pkgName === moduleId) {
-          const main = pkg.main || 'index.js';
+          // Prefer browser field (string form) since we're running in a browser
+          let main: string | undefined;
+          if (typeof pkg.browser === 'string') {
+            main = pkg.browser;
+          }
+          if (!main) {
+            main = pkg.main || 'index.js';
+          }
           const mainPath = pathShim.join(pkgRoot, main);
           const resolvedMain = tryResolveFile(mainPath);
           if (resolvedMain) return resolvedMain;
         }
       }
+
+      // Fall back to direct file/directory resolution (for sub-paths or packages without package.json)
+      const fullPath = pathShim.join(nodeModulesDir, moduleId);
+      const resolved = tryResolveFile(fullPath);
+      if (resolved) return resolved;
 
       return null;
     };
@@ -954,6 +977,12 @@ export class Runtime {
     // Only polyfill if not already available (i.e., not V8/Chrome)
     if (typeof (Error as any).captureStackTrace === 'function') return;
 
+    // Set a default stackTraceLimit so Math.max(10, undefined) doesn't produce NaN
+    // (depd and other packages read this value)
+    if ((Error as any).stackTraceLimit === undefined) {
+      (Error as any).stackTraceLimit = 10;
+    }
+
     // Parse a stack trace string into structured frames
     function parseStack(stack: string): Array<{fn: string, file: string, line: number, col: number}> {
       if (!stack) return [];
@@ -1013,32 +1042,68 @@ export class Runtime {
       };
     }
 
-    // Polyfill Error.captureStackTrace
-    (Error as any).captureStackTrace = function(target: any, constructorOpt?: Function) {
-      const err = new Error();
-      const stack = err.stack || '';
-
-      // If prepareStackTrace is set, provide structured call sites
-      if (typeof (Error as any).prepareStackTrace === 'function') {
-        const frames = parseStack(stack);
-        // Skip frames up to and including constructorOpt if provided
-        let startIdx = 0;
-        if (constructorOpt && constructorOpt.name) {
-          for (let i = 0; i < frames.length; i++) {
-            if (frames[i].fn === constructorOpt.name) {
-              startIdx = i + 1;
-              break;
-            }
+    // Helper: parse stack and create CallSite objects, used by both captureStackTrace and .stack getter
+    function buildCallSites(stack: string, constructorOpt?: Function) {
+      const frames = parseStack(stack);
+      let startIdx = 0;
+      if (constructorOpt && constructorOpt.name) {
+        for (let i = 0; i < frames.length; i++) {
+          if (frames[i].fn === constructorOpt.name) {
+            startIdx = i + 1;
+            break;
           }
         }
-        const callSites = frames.slice(startIdx).map(createCallSite);
+      }
+      return frames.slice(startIdx).map(createCallSite);
+    }
+
+    // Symbol to store raw stack string, used by the .stack getter
+    const stackSymbol = Symbol('rawStack');
+
+    // Intercept .stack on Error.prototype so that packages using the V8 pattern
+    // "Error.prepareStackTrace = fn; new Error().stack" also get CallSite objects.
+    // In V8, reading .stack lazily triggers prepareStackTrace; Safari doesn't do this.
+    Object.defineProperty(Error.prototype, 'stack', {
+      get() {
+        const rawStack = (this as any)[stackSymbol];
+        if (rawStack !== undefined && typeof (Error as any).prepareStackTrace === 'function') {
+          const callSites = buildCallSites(rawStack);
+          try {
+            return (Error as any).prepareStackTrace(this, callSites);
+          } catch {
+            return rawStack;
+          }
+        }
+        return rawStack;
+      },
+      set(value: string) {
+        (this as any)[stackSymbol] = value;
+      },
+      configurable: true,
+      enumerable: false,
+    });
+
+    // Polyfill Error.captureStackTrace
+    (Error as any).captureStackTrace = function(target: any, constructorOpt?: Function) {
+      // Temporarily clear prepareStackTrace to get the raw stack string
+      // (otherwise our .stack getter would call prepareStackTrace recursively)
+      const savedPrepare = (Error as any).prepareStackTrace;
+      (Error as any).prepareStackTrace = undefined;
+      const err = new Error();
+      const rawStack = err.stack || '';
+      (Error as any).prepareStackTrace = savedPrepare;
+
+      // If prepareStackTrace is set, provide structured call sites
+      if (typeof savedPrepare === 'function') {
+        const callSites = buildCallSites(rawStack, constructorOpt);
         try {
-          target.stack = (Error as any).prepareStackTrace(target, callSites);
-        } catch {
-          target.stack = stack;
+          target.stack = savedPrepare(target, callSites);
+        } catch (e) {
+          console.warn('[almostnode] Error.prepareStackTrace threw:', e);
+          target.stack = rawStack;
         }
       } else {
-        target.stack = stack;
+        target.stack = rawStack;
       }
     };
   }

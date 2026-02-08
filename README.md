@@ -315,7 +315,7 @@ fs.copyFileSync(getServiceWorkerPath(), './public/__sw__.js');
 
 | Feature | almostnode | WebContainers |
 |---------|-----------|---------------|
-| **Bundle Size** | ~50KB | ~2MB |
+| **Bundle Size** | ~250KB gzipped | ~2MB |
 | **Startup Time** | Instant | 2-5 seconds |
 | **Execution Model** | Main thread or Web Worker (configurable) | Web Worker isolates |
 | **Shell** | `just-bash` (POSIX subset) | Full Linux kernel |

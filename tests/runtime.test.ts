@@ -576,4 +576,98 @@ describe('Runtime', () => {
       expect(() => repl2.eval('x')).toThrow();
     });
   });
+
+  describe('browser field in package.json', () => {
+    it('should prefer browser field (string) over main for package entry', () => {
+      // Simulate depd's package.json: "browser": "lib/browser/index.js"
+      vfs.writeFileSync('/node_modules/testpkg/package.json', JSON.stringify({
+        name: 'testpkg',
+        browser: 'lib/browser/index.js',
+        main: 'index.js',
+      }));
+      vfs.writeFileSync('/node_modules/testpkg/index.js', 'module.exports = "node";');
+      vfs.writeFileSync('/node_modules/testpkg/lib/browser/index.js', 'module.exports = "browser";');
+
+      const { exports } = runtime.execute('module.exports = require("testpkg");');
+      expect(exports).toBe('browser');
+    });
+
+    it('should fall back to main when browser field is not set', () => {
+      vfs.writeFileSync('/node_modules/nopkg/package.json', JSON.stringify({
+        name: 'nopkg',
+        main: 'lib/main.js',
+      }));
+      vfs.writeFileSync('/node_modules/nopkg/lib/main.js', 'module.exports = "main";');
+
+      const { exports } = runtime.execute('module.exports = require("nopkg");');
+      expect(exports).toBe('main');
+    });
+
+    it('should fall back to index.js when neither browser nor main is set', () => {
+      vfs.writeFileSync('/node_modules/defpkg/package.json', JSON.stringify({
+        name: 'defpkg',
+      }));
+      vfs.writeFileSync('/node_modules/defpkg/index.js', 'module.exports = "default";');
+
+      const { exports } = runtime.execute('module.exports = require("defpkg");');
+      expect(exports).toBe('default');
+    });
+  });
+
+  describe('Error.captureStackTrace polyfill', () => {
+    it('should provide CallSite objects when prepareStackTrace is set', () => {
+      // Save and remove native captureStackTrace to test polyfill
+      const origCapture = (Error as any).captureStackTrace;
+      const origPrepare = (Error as any).prepareStackTrace;
+      delete (Error as any).captureStackTrace;
+      delete (Error as any).prepareStackTrace;
+
+      try {
+        // Create a fresh runtime which will install the polyfill
+        const testVfs = new VirtualFS();
+        new Runtime(testVfs);
+
+        // Verify polyfill was installed
+        expect(typeof (Error as any).captureStackTrace).toBe('function');
+
+        // Test the depd pattern: set prepareStackTrace, call captureStackTrace, read .stack
+        const obj: any = {};
+        (Error as any).prepareStackTrace = (_err: any, stack: any[]) => stack;
+        (Error as any).captureStackTrace(obj);
+
+        // obj.stack should be an array of CallSite-like objects
+        expect(Array.isArray(obj.stack)).toBe(true);
+        if (obj.stack.length > 0) {
+          const callSite = obj.stack[0];
+          expect(typeof callSite.getFileName).toBe('function');
+          expect(typeof callSite.getLineNumber).toBe('function');
+          expect(typeof callSite.getColumnNumber).toBe('function');
+          expect(typeof callSite.getFunctionName).toBe('function');
+          expect(typeof callSite.isNative).toBe('function');
+          expect(typeof callSite.isEval).toBe('function');
+          expect(typeof callSite.toString).toBe('function');
+        }
+      } finally {
+        // Restore native captureStackTrace
+        (Error as any).captureStackTrace = origCapture;
+        (Error as any).prepareStackTrace = origPrepare;
+      }
+    });
+
+    it('should set stackTraceLimit when polyfilling', () => {
+      const origCapture = (Error as any).captureStackTrace;
+      const origLimit = (Error as any).stackTraceLimit;
+      delete (Error as any).captureStackTrace;
+      delete (Error as any).stackTraceLimit;
+
+      try {
+        const testVfs = new VirtualFS();
+        new Runtime(testVfs);
+        expect((Error as any).stackTraceLimit).toBe(10);
+      } finally {
+        (Error as any).captureStackTrace = origCapture;
+        (Error as any).stackTraceLimit = origLimit;
+      }
+    });
+  });
 });

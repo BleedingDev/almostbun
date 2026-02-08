@@ -46,6 +46,10 @@
       <a href="./vite-guide.html">Vite</a>
     </div>
     <div class="sidebar-group">
+      <div class="sidebar-label">Tutorials</div>
+      <a href="./tutorial-editor.html">Editor + Preview</a>
+    </div>
+    <div class="sidebar-group">
       <div class="sidebar-label">Reference</div>
       <a href="./api-reference.html" class="active">API Reference</a>
     </div>
@@ -305,6 +309,26 @@ repl<span class="op">.</span><span class="fn">eval</span><span class="op">(</spa
     <p>A virtual Next.js dev server that supports both App Router and Pages Router, CSS Modules, API routes, dynamic routes, route groups, and HMR via React Refresh.</p>
     <p>Import from <code>almostnode/next</code>.</p>
 
+    <h3>Methods</h3>
+    <table>
+      <thead><tr><th>Method</th><th>Signature</th><th>Description</th></tr></thead>
+      <tbody>
+        <tr><td><code>start</code></td><td><code>(): void</code></td><td>Start file watching for HMR. <strong>Required</strong> before HMR updates will fire.</td></tr>
+        <tr><td><code>stop</code></td><td><code>(): void</code></td><td>Stop the server and clean up file watchers</td></tr>
+        <tr><td><code>setHMRTarget</code></td><td><code>(window: Window): void</code></td><td>Set the iframe <code>contentWindow</code> as the HMR update target. Call inside the iframe's <code>onload</code> handler.</td></tr>
+        <tr><td><code>handleRequest</code></td><td><code>(method, url, headers, body): Promise&lt;Response&gt;</code></td><td>Handle an HTTP request (used internally by the Service Worker bridge)</td></tr>
+      </tbody>
+    </table>
+
+    <h3>Events</h3>
+    <table>
+      <thead><tr><th>Event</th><th>Payload</th><th>Description</th></tr></thead>
+      <tbody>
+        <tr><td><code>'hmr-update'</code></td><td><code>{ type: 'update' | 'full-reload', path: string, timestamp: number }</code></td><td>Fired when a VFS file changes. JS/CSS files get <code>'update'</code>, others get <code>'full-reload'</code>.</td></tr>
+        <tr><td><code>'listening'</code></td><td><code>port: number</code></td><td>Fired when <code>start()</code> is called</td></tr>
+      </tbody>
+    </table>
+
     <!-- ViteDevServer -->
     <h2>ViteDevServer</h2>
     <div class="method-sig">
@@ -312,6 +336,7 @@ repl<span class="op">.</span><span class="fn">eval</span><span class="op">(</spa
     </div>
     <p>A virtual Vite dev server with React support, JSX/TSX transforms, npm module resolution, and HMR via React Refresh.</p>
     <p>Import from <code>almostnode/vite</code>.</p>
+    <p>Shares the same <code>start()</code>, <code>stop()</code>, <code>setHMRTarget()</code>, and <code>handleRequest()</code> methods as <code>NextDevServer</code>. Emits the same <code>'hmr-update'</code> event.</p>
 
     <!-- Utility -->
     <h2>Utility Functions</h2>

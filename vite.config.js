@@ -84,6 +84,8 @@ export default defineConfig({
         'docs/vite-guide': resolve(__dirname, 'docs/vite-guide.html'),
         'docs/security': resolve(__dirname, 'docs/security.html'),
         'docs/api-reference': resolve(__dirname, 'docs/api-reference.html'),
+        'docs/tutorial-editor': resolve(__dirname, 'docs/tutorial-editor.html'),
+        'examples/editor-tutorial': resolve(__dirname, 'examples/editor-tutorial.html'),
       },
     },
     outDir: 'dist-site',

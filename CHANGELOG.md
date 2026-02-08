@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.9] - 2026-02-08
+
+### Added
+
+- **`browser` field support in module resolution:** npm packages with a `browser` field in package.json now resolve to their browser-specific entry point. Supports both string form (`"browser": "lib/browser/index.js"`) and object form (`"browser": {"./lib/node.js": "./lib/browser.js"}`). This fixes compatibility with packages like `depd`, `debug`, and others that provide browser-optimized versions.
+
+### Fixed
+
+- **Safari Express crash:** Fixed `callSite.getFileName is not a function` error when running Express in Safari. The `depd` package (an Express dependency) uses V8-specific `Error.captureStackTrace` APIs that don't exist in WebKit. By respecting depd's `"browser"` field, the no-op browser version is now loaded instead.
+- **`Error.captureStackTrace` polyfill improvements:** Added `Error.stackTraceLimit` default, `.stack` getter interception on `Error.prototype` for lazy `prepareStackTrace` evaluation, re-entrancy protection, and error logging instead of silent fallback.
+
 ## [0.2.8] - 2026-02-07
 
 ### Added
