@@ -6,6 +6,7 @@ export interface PackageJson {
   version?: string;
   main?: string;
   module?: string;
+  browser?: string | Record<string, string | false>;
   types?: string;
   exports?: Record<string, unknown> | string;
   dependencies?: Record<string, string>;
