@@ -122,10 +122,10 @@ export const promises = {
   lookup: (hostname: string, options?: { family?: number; all?: boolean }) => {
     return new Promise((resolve, reject) => {
       if (options?.all) {
-        lookup(hostname, options, (err, addresses) => {
+        lookup(hostname, options, ((err: Error | null, addresses?: Array<{ address: string; family: number }>) => {
           if (err) reject(err);
           else resolve(addresses || []);
-        });
+        }) as LookupAllCallback);
         return;
       }
 
