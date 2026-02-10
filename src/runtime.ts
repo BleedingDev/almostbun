@@ -445,6 +445,69 @@ function createRequire(
     baseUrl: string;
     paths: Array<{ pattern: string; targets: string[] }>;
   } | null> = new Map();
+  let legacyEventsModuleCache: unknown = null;
+
+  const copyDescriptors = (from: Record<string, unknown>, to: Record<string, unknown>): void => {
+    for (const prop of Object.getOwnPropertyNames(from)) {
+      if (prop === 'length' || prop === 'name' || prop === 'prototype') {
+        continue;
+      }
+      const descriptor = Object.getOwnPropertyDescriptor(from, prop);
+      if (!descriptor) {
+        continue;
+      }
+      try {
+        Object.defineProperty(to, prop, descriptor);
+      } catch {
+        // Ignore non-configurable properties.
+      }
+    }
+  };
+
+  const getLegacyCompatibleEventsModule = (): unknown => {
+    if (legacyEventsModuleCache) {
+      return legacyEventsModuleCache;
+    }
+
+    const originalModule = builtinModules.events as unknown;
+    const eventEmitterCtor =
+      typeof originalModule === 'function'
+        ? originalModule
+        : (originalModule &&
+            typeof originalModule === 'object' &&
+            typeof (originalModule as { EventEmitter?: unknown }).EventEmitter === 'function'
+          ? (originalModule as { EventEmitter: (...args: unknown[]) => unknown }).EventEmitter
+          : null);
+
+    if (!eventEmitterCtor || !/^\s*class\b/.test(Function.prototype.toString.call(eventEmitterCtor))) {
+      legacyEventsModuleCache = originalModule;
+      return originalModule;
+    }
+
+    const classEmitter = eventEmitterCtor as (...args: unknown[]) => unknown;
+    const callableEmitter = function EventEmitterCompat(this: object): unknown {
+      if (!(this instanceof callableEmitter)) {
+        return new (callableEmitter as unknown as { new(): unknown })();
+      }
+      return undefined;
+    } as ((...args: unknown[]) => unknown) & Record<string, unknown>;
+
+    callableEmitter.prototype = (classEmitter as unknown as { prototype: unknown }).prototype;
+    try {
+      Object.setPrototypeOf(callableEmitter, classEmitter);
+    } catch {
+      // Ignore prototype assignment issues.
+    }
+
+    copyDescriptors(classEmitter as unknown as Record<string, unknown>, callableEmitter);
+    if (originalModule && originalModule !== classEmitter && typeof originalModule === 'object') {
+      copyDescriptors(originalModule as Record<string, unknown>, callableEmitter);
+    }
+    callableEmitter.EventEmitter = callableEmitter;
+
+    legacyEventsModuleCache = callableEmitter;
+    return legacyEventsModuleCache;
+  };
 
   const getParsedPackageJson = (pkgPath: string): PackageJson | null => {
     if (packageJsonCache.has(pkgPath)) {
@@ -687,7 +750,16 @@ function createRequire(
     }
 
     // Built-in modules
-    if (builtinModules[id] || id === 'bun' || id === 'fs' || id === 'process' || id === 'url' || id === 'querystring' || id === 'util') {
+    if (
+      builtinModules[id] ||
+      id === 'bun' ||
+      id === 'fs' ||
+      id === 'fs/promises' ||
+      id === 'process' ||
+      id === 'url' ||
+      id === 'querystring' ||
+      id === 'util'
+    ) {
       return id;
     }
 
@@ -1094,6 +1166,7 @@ ${code}
   };
 
   let swcCoreShimCache: Record<string, unknown> | null = null;
+  let httpErrorsShimCache: Record<string, unknown> | null = null;
   const getSwcCoreShim = (): Record<string, unknown> => {
     if (swcCoreShimCache) {
       return swcCoreShimCache;
@@ -1204,6 +1277,78 @@ ${code}
     return swcCoreShimCache;
   };
 
+  const getHttpErrorsShim = (): Record<string, unknown> => {
+    if (httpErrorsShimCache) {
+      return httpErrorsShimCache;
+    }
+
+    class HttpError extends Error {
+      status: number;
+      statusCode: number;
+      expose: boolean;
+
+      constructor(status = 500, message?: string) {
+        super(message || `HTTP ${status}`);
+        this.name = 'HttpError';
+        this.status = status;
+        this.statusCode = status;
+        this.expose = status < 500;
+      }
+    }
+
+    const createError = (...args: unknown[]): HttpError => {
+      let status = 500;
+      let message: string | undefined;
+      let originalError: Error | undefined;
+
+      for (const arg of args) {
+        if (typeof arg === 'number') {
+          status = arg;
+          continue;
+        }
+        if (typeof arg === 'string') {
+          message = arg;
+          continue;
+        }
+        if (arg instanceof Error) {
+          originalError = arg;
+          continue;
+        }
+      }
+
+      const err = new HttpError(status, message || originalError?.message);
+      if (originalError?.stack) {
+        err.stack = originalError.stack;
+      }
+      return err;
+    };
+
+    const withStatics = createError as ((...args: unknown[]) => HttpError) & {
+      HttpError: typeof HttpError;
+      isHttpError: (value: unknown) => boolean;
+      [status: number]: (message?: string) => HttpError;
+    };
+
+    withStatics.HttpError = HttpError;
+    withStatics.isHttpError = (value: unknown): boolean => {
+      if (!value || typeof value !== 'object') {
+        return false;
+      }
+      const candidate = value as { status?: unknown; statusCode?: unknown };
+      return (
+        typeof candidate.status === 'number' &&
+        typeof candidate.statusCode === 'number'
+      );
+    };
+
+    for (let status = 400; status < 600; status += 1) {
+      withStatics[status] = (message?: string) => createError(status, message);
+    }
+
+    httpErrorsShimCache = withStatics as unknown as Record<string, unknown>;
+    return httpErrorsShimCache;
+  };
+
   const require: RequireFunction = (id: string): unknown => {
     // Handle node: protocol prefix (Node.js 16+)
     if (id.startsWith('node:')) {
@@ -1233,6 +1378,19 @@ ${code}
     }
     if (id === '@swc/core' || id === '@swc/core-wasm32-wasi' || id.startsWith('@swc/core/')) {
       return getSwcCoreShim();
+    }
+    if (id === 'http-errors') {
+      return getHttpErrorsShim();
+    }
+    if (id === 'toidentifier') {
+      return function toIdentifier(input: unknown): string {
+        const str = input == null ? '' : String(input);
+        return str
+          .split(' ')
+          .map((token) => token.slice(0, 1).toUpperCase() + token.slice(1))
+          .join('')
+          .replace(/[^ _0-9a-z]/gi, '');
+      };
     }
     // Special handling for 'module' - provide a constructor-compatible export
     // with a runtime-bound createRequire implementation.
@@ -1286,6 +1444,9 @@ ${code}
 
       return runtimeModule;
     }
+    if (id === 'events') {
+      return getLegacyCompatibleEventsModule();
+    }
     if (builtinModules[id]) {
       return builtinModules[id];
     }
@@ -1313,6 +1474,9 @@ ${code}
 
     // If resolved to a built-in name (shouldn't happen but safety check)
     if (builtinModules[resolved]) {
+      if (resolved === 'events') {
+        return getLegacyCompatibleEventsModule();
+      }
       return builtinModules[resolved];
     }
 
@@ -1334,8 +1498,21 @@ ${code}
     if (resolved.includes('/node_modules/@swc/core/')) {
       return getSwcCoreShim();
     }
+    if (resolved.includes('/node_modules/http-errors/')) {
+      return getHttpErrorsShim();
+    }
+    if (resolved.includes('/node_modules/toidentifier/')) {
+      return function toIdentifier(input: unknown): string {
+        const str = input == null ? '' : String(input);
+        return str
+          .split(' ')
+          .map((token) => token.slice(0, 1).toUpperCase() + token.slice(1))
+          .join('')
+          .replace(/[^ _0-9a-z]/gi, '');
+      };
+    }
 
-    const loadedExports = loadModule(resolved).exports as any;
+    let loadedExports = loadModule(resolved).exports as any;
 
     // CommonJS/ESM interop edge case:
     // Some packages expect require('lru-cache').LRUCache even when the package
@@ -1357,11 +1534,136 @@ ${code}
       }
     }
 
+    // CommonJS/ESM interop edge case for chalk:
+    // transformed ESM builds may expose color methods under `default`
+    // while CJS callers expect `require('chalk').cyan(...)`.
+    if (
+      id === 'chalk' ||
+      /\/node_modules\/chalk\//.test(resolved)
+    ) {
+      if (typeof loadedExports === 'function') {
+        // Many bundler `__toESM` helpers copy only enumerable properties from
+        // CJS exports. Chalk color methods are non-enumerable on the function
+        // export, so make them enumerable to preserve `import * as chalk` usage.
+        for (const prop of Object.getOwnPropertyNames(loadedExports)) {
+          if (
+            prop === 'length' ||
+            prop === 'name' ||
+            prop === 'prototype' ||
+            prop === 'arguments' ||
+            prop === 'caller'
+          ) {
+            continue;
+          }
+          const descriptor = Object.getOwnPropertyDescriptor(loadedExports, prop);
+          if (!descriptor || descriptor.enumerable) {
+            continue;
+          }
+          try {
+            Object.defineProperty(loadedExports, prop, {
+              ...descriptor,
+              enumerable: true,
+            });
+          } catch {
+            // Ignore non-configurable properties.
+          }
+        }
+        return loadedExports;
+      }
+      if (loadedExports && typeof loadedExports === 'object') {
+        const defaultExport = loadedExports.default;
+        if (
+          defaultExport &&
+          (typeof defaultExport === 'function' || typeof defaultExport === 'object') &&
+          typeof loadedExports.cyan !== 'function' &&
+          typeof defaultExport.cyan === 'function'
+        ) {
+          return defaultExport;
+        }
+      }
+    }
+
+    // Compatibility for mixed statuses/http-errors versions:
+    // some `http-errors` releases read `statuses.message`, while newer
+    // `statuses` publishes `STATUS_CODES`.
+    if (
+      id === 'statuses' ||
+      /\/node_modules\/statuses\//.test(resolved)
+    ) {
+      if (loadedExports && (typeof loadedExports === 'function' || typeof loadedExports === 'object')) {
+        if (!loadedExports.message && loadedExports.STATUS_CODES && typeof loadedExports.STATUS_CODES === 'object') {
+          loadedExports.message = loadedExports.STATUS_CODES;
+        }
+        if (!loadedExports.STATUS_CODES && loadedExports.message && typeof loadedExports.message === 'object') {
+          loadedExports.STATUS_CODES = loadedExports.message;
+        }
+      }
+    }
+
+    // Legacy EventEmitter compatibility:
+    // older stacks use util.inherits + EventEmitter.call(this), which fails
+    // when EventEmitter is class-only.
+    if (
+      id === 'events' ||
+      /\/node_modules\/events\//.test(resolved)
+    ) {
+      const candidate =
+        typeof loadedExports === 'function'
+          ? loadedExports
+          : (loadedExports && typeof loadedExports === 'object' && typeof loadedExports.EventEmitter === 'function'
+            ? loadedExports.EventEmitter
+            : null);
+
+      if (candidate && /^\s*class\b/.test(Function.prototype.toString.call(candidate))) {
+        const classEmitter = candidate as (...args: unknown[]) => unknown;
+        const callableEmitter = function EventEmitterCompat(this: object): unknown {
+          if (!(this instanceof callableEmitter)) {
+            return new (callableEmitter as unknown as { new(): unknown })();
+          }
+          return undefined;
+        } as ((...args: unknown[]) => unknown) & Record<string, unknown>;
+
+        callableEmitter.prototype = (classEmitter as unknown as { prototype: unknown }).prototype;
+        try {
+          Object.setPrototypeOf(callableEmitter, classEmitter);
+        } catch {
+          // Ignore if prototype assignment fails in this runtime.
+        }
+
+        for (const prop of Object.getOwnPropertyNames(classEmitter)) {
+          if (prop === 'length' || prop === 'name' || prop === 'prototype') {
+            continue;
+          }
+          const descriptor = Object.getOwnPropertyDescriptor(classEmitter, prop);
+          if (!descriptor) {
+            continue;
+          }
+          try {
+            Object.defineProperty(callableEmitter, prop, descriptor);
+          } catch {
+            // Ignore non-configurable properties.
+          }
+        }
+
+        if (loadedExports === classEmitter) {
+          loadedExports = callableEmitter;
+          loadedExports.EventEmitter = callableEmitter;
+        } else if (loadedExports && typeof loadedExports === 'object') {
+          if (loadedExports.EventEmitter === classEmitter) {
+            loadedExports.EventEmitter = callableEmitter;
+          }
+          if (loadedExports.default === classEmitter) {
+            loadedExports.default = callableEmitter;
+          }
+        }
+      }
+    }
+
     return loadedExports;
   };
 
   require.resolve = (id: string): string => {
-    if (id === 'bun' || id === 'fs' || id === 'process' || builtinModules[id]) {
+    if (id === 'bun' || id === 'fs' || id === 'fs/promises' || id === 'process' || builtinModules[id]) {
       return id;
     }
     return resolveModule(id, currentDir);

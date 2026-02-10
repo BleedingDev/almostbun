@@ -45,6 +45,13 @@ export interface FsShim {
   watch(filename: string, listener?: WatchListener): FSWatcher;
   readFile(path: string, callback: (err: Error | null, data?: Uint8Array) => void): void;
   readFile(path: string, options: { encoding: string }, callback: (err: Error | null, data?: string) => void): void;
+  writeFile(path: string, data: string | Uint8Array, callback: (err: Error | null) => void): void;
+  writeFile(
+    path: string,
+    data: string | Uint8Array,
+    options: { encoding?: string; mode?: number; flag?: string },
+    callback: (err: Error | null) => void
+  ): void;
   stat(path: string, callback: (err: Error | null, stats?: Stats) => void): void;
   lstat(path: string, callback: (err: Error | null, stats?: Stats) => void): void;
   readdir(path: string, callback: (err: Error | null, files?: string[]) => void): void;
@@ -150,6 +157,32 @@ function createBuffer(data: Uint8Array): Buffer {
   });
 
   return buffer;
+}
+
+function normalizeEncoding(
+  encodingOrOptions?: string | { encoding?: string | null }
+): string | null {
+  if (typeof encodingOrOptions === 'string') {
+    return encodingOrOptions.toLowerCase();
+  }
+  if (
+    encodingOrOptions &&
+    typeof encodingOrOptions === 'object' &&
+    'encoding' in encodingOrOptions
+  ) {
+    const value = encodingOrOptions.encoding;
+    if (value == null) {
+      return null;
+    }
+    return String(value).toLowerCase();
+  }
+  if (encodingOrOptions && typeof encodingOrOptions === 'object') {
+    // Compatibility: some bundled toolchains pass {} and still expect UTF-8 text.
+    // In Node this would return Buffer, but defaulting to UTF-8 avoids widespread
+    // runtime breakage for config/package readers in browser-only execution.
+    return 'utf8';
+  }
+  return undefined;
 }
 
 /**
@@ -281,14 +314,9 @@ export function createFsShim(vfs: VirtualFS, getCwd?: () => string): FsShim {
       return new Promise((resolve, reject) => {
         try {
           const path = resolvePath(pathLike);
-          let encoding: string | undefined;
-          if (typeof encodingOrOptions === 'string') {
-            encoding = encodingOrOptions;
-          } else if (encodingOrOptions?.encoding) {
-            encoding = encodingOrOptions.encoding;
-          }
+          const encoding = normalizeEncoding(encodingOrOptions);
 
-          if (encoding === 'utf8' || encoding === 'utf-8') {
+          if (encoding === 'utf8' || encoding === 'utf-8' || encoding?.startsWith('utf8')) {
             resolve(vfs.readFileSync(path, 'utf8'));
           } else {
             resolve(createBuffer(vfs.readFileSync(path)));
@@ -407,15 +435,9 @@ export function createFsShim(vfs: VirtualFS, getCwd?: () => string): FsShim {
       encodingOrOptions?: string | { encoding?: string | null }
     ): Buffer | string {
       const path = resolvePath(pathLike);
-      let encoding: string | undefined;
+      const encoding = normalizeEncoding(encodingOrOptions);
 
-      if (typeof encodingOrOptions === 'string') {
-        encoding = encodingOrOptions;
-      } else if (encodingOrOptions?.encoding) {
-        encoding = encodingOrOptions.encoding;
-      }
-
-      if (encoding === 'utf8' || encoding === 'utf-8') {
+      if (encoding === 'utf8' || encoding === 'utf-8' || encoding?.startsWith('utf8')) {
         return vfs.readFileSync(path, 'utf8');
       }
 
@@ -755,6 +777,24 @@ export function createFsShim(vfs: VirtualFS, getCwd?: () => string): FsShim {
     ): void {
       const path = resolvePath(pathLike);
       vfs.readFile(path, optionsOrCallback as { encoding?: string }, callback);
+    },
+
+    writeFile(
+      pathLike: unknown,
+      data: string | Uint8Array,
+      optionsOrCallback?:
+        | { encoding?: string; mode?: number; flag?: string }
+        | ((err: Error | null) => void),
+      callback?: (err: Error | null) => void
+    ): void {
+      const path = resolvePath(pathLike);
+      const cb = typeof optionsOrCallback === 'function' ? optionsOrCallback : callback;
+      try {
+        vfs.writeFileSync(path, data);
+        cb?.(null);
+      } catch (error) {
+        cb?.(error as Error);
+      }
     },
 
     stat(pathLike: unknown, callback: (err: Error | null, stats?: Stats) => void): void {

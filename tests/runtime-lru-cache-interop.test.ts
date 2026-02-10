@@ -243,6 +243,96 @@ describe('runtime lru-cache interop', () => {
     });
   });
 
+  it('maps chalk default export for CJS callers expecting chalk.cyan', () => {
+    vfs.writeFileSync(
+      '/project/node_modules/chalk/package.json',
+      JSON.stringify({
+        name: 'chalk',
+        version: '0.0.0-test',
+        main: 'index.js',
+      })
+    );
+    vfs.writeFileSync(
+      '/project/node_modules/chalk/index.js',
+      `
+      module.exports = {
+        default: {
+          cyan(value) {
+            return '[cyan]' + value;
+          }
+        }
+      };
+      `
+    );
+
+    const { exports } = runtime.execute(
+      `
+      const chalk = require('chalk');
+      module.exports = {
+        cyanType: typeof chalk.cyan,
+        sample: chalk.cyan('ok'),
+      };
+      `,
+      '/project/entry-chalk.js'
+    );
+
+    expect(exports).toEqual({
+      cyanType: 'function',
+      sample: '[cyan]ok',
+    });
+  });
+
+  it('preserves chalk.cyan under __toESM-style namespace wrapping', () => {
+    vfs.writeFileSync(
+      '/project/node_modules/chalk/package.json',
+      JSON.stringify({
+        name: 'chalk',
+        version: '0.0.0-test',
+        main: 'index.js',
+      })
+    );
+    vfs.writeFileSync(
+      '/project/node_modules/chalk/index.js',
+      `
+      function chalk(value) {
+        return value;
+      }
+      Object.defineProperty(chalk, 'cyan', {
+        value(value) {
+          return '[cyan]' + value;
+        },
+        enumerable: false,
+        configurable: true,
+      });
+      module.exports = chalk;
+      `
+    );
+
+    const { exports } = runtime.execute(
+      `
+      function __toESM(mod) {
+        const ns = {};
+        for (const key in mod) {
+          ns[key] = mod[key];
+        }
+        ns.default = mod;
+        return ns;
+      }
+      const chalkNs = __toESM(require('chalk'));
+      module.exports = {
+        cyanType: typeof chalkNs.cyan,
+        sample: chalkNs.cyan('ok'),
+      };
+      `,
+      '/project/entry-chalk-to-esm.js'
+    );
+
+    expect(exports).toEqual({
+      cyanType: 'function',
+      sample: '[cyan]ok',
+    });
+  });
+
   it('provides __dynamicImport fallback for vm.runInThisContext wrappers', async () => {
     vfs.writeFileSync('/project/dep.js', 'module.exports = 77;');
 
@@ -256,5 +346,110 @@ describe('runtime lru-cache interop', () => {
     );
 
     await expect(exports as Promise<unknown>).resolves.toBe(77);
+  });
+
+  it('supports require.resolve for fs/promises builtin', () => {
+    const { exports } = runtime.execute(
+      `
+      const resolved = require.resolve('fs/promises');
+      module.exports = { resolved };
+      `,
+      '/project/entry-resolve-fs-promises.js'
+    );
+
+    expect(exports).toEqual({
+      resolved: 'fs/promises',
+    });
+  });
+
+  it('aliases statuses.STATUS_CODES to statuses.message for http-errors compatibility', () => {
+    vfs.writeFileSync(
+      '/project/node_modules/statuses/package.json',
+      JSON.stringify({
+        name: 'statuses',
+        version: '0.0.0-test',
+        main: 'index.js',
+      })
+    );
+    vfs.writeFileSync(
+      '/project/node_modules/statuses/index.js',
+      `
+      function statuses() {}
+      statuses.STATUS_CODES = { 200: 'OK', 500: 'Internal Server Error' };
+      module.exports = statuses;
+      `
+    );
+
+    const { exports } = runtime.execute(
+      `
+      const statuses = require('statuses');
+      module.exports = {
+        hasMessage: typeof statuses.message,
+        ok: statuses.message[200],
+        hasStatusCodes: typeof statuses.STATUS_CODES,
+      };
+      `,
+      '/project/entry-statuses.js'
+    );
+
+    expect(exports).toEqual({
+      hasMessage: 'object',
+      ok: 'OK',
+      hasStatusCodes: 'object',
+    });
+  });
+
+  it('keeps toidentifier robust for undefined inputs from third-party stacks', () => {
+    const { exports } = runtime.execute(
+      `
+      const toIdentifier = require('toidentifier');
+      module.exports = {
+        safeUndefined: toIdentifier(undefined),
+        safeNull: toIdentifier(null),
+        safeText: toIdentifier('hello world'),
+      };
+      `,
+      '/project/entry-toidentifier.js'
+    );
+
+    expect(exports).toEqual({
+      safeUndefined: '',
+      safeNull: '',
+      safeText: 'HelloWorld',
+    });
+  });
+
+  it('supports legacy EventEmitter.call(this) inheritance paths', () => {
+    const { exports } = runtime.execute(
+      `
+      const util = require('util');
+      const EventEmitter = require('events');
+
+      function LegacyServer() {
+        EventEmitter.call(this);
+      }
+      util.inherits(LegacyServer, EventEmitter);
+
+      const server = new LegacyServer();
+      let seen = false;
+      server.on('ready', () => {
+        seen = true;
+      });
+      server.emit('ready');
+
+      module.exports = {
+        seen,
+        hasOn: typeof server.on,
+        hasEmit: typeof server.emit,
+      };
+      `,
+      '/project/entry-events-legacy.js'
+    );
+
+    expect(exports).toEqual({
+      seen: true,
+      hasOn: 'function',
+      hasEmit: 'function',
+    });
   });
 });
