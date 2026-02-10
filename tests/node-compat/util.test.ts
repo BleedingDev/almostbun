@@ -10,6 +10,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import util, {
   format,
+  formatWithOptions,
   inspect,
   inherits,
   deprecate,
@@ -112,6 +113,18 @@ describe('util module (Node.js compat)', () => {
         const result = format({ a: 1 });
         expect(result).toContain('a');
       });
+    });
+  });
+
+  describe('util.formatWithOptions()', () => {
+    it('should format like util.format for string templates', () => {
+      assert.strictEqual(formatWithOptions({ depth: 1 }, 'hello %s %d', 'world', 7), 'hello world 7');
+    });
+
+    it('should inspect non-string values using inspect options', () => {
+      const result = formatWithOptions({ depth: 1 }, { a: { b: 2 } });
+      expect(result).toContain('a');
+      expect(result).toContain('b: 2');
     });
   });
 
@@ -589,6 +602,7 @@ describe('util module (Node.js compat)', () => {
   describe('default export', () => {
     it('should have all util functions', () => {
       expect(util.format).toBe(format);
+      expect(util.formatWithOptions).toBe(formatWithOptions);
       expect(util.inspect).toBe(inspect);
       expect(util.inherits).toBe(inherits);
       expect(util.deprecate).toBe(deprecate);

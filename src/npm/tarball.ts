@@ -6,6 +6,7 @@
 import pako from 'pako';
 import { VirtualFS } from '../virtual-fs';
 import * as path from '../shims/path';
+import { fetchWithRetry } from './fetch';
 
 export interface ExtractOptions {
   stripComponents?: number; // Number of leading path components to strip (default: 1 for npm's "package/" prefix)
@@ -192,7 +193,15 @@ export async function downloadAndExtract(
 
   onProgress?.(`Downloading ${url}...`);
 
-  const response = await fetch(url);
+  const response = await fetchWithRetry(
+    url,
+    undefined,
+    {
+      onRetry: (attempt, reason) => {
+        onProgress?.(`Retrying download (${attempt}) for ${url}: ${reason}`);
+      },
+    }
+  );
   if (!response.ok) {
     throw new Error(`Failed to download tarball: ${response.status}`);
   }

@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>almostbun Repo Runner</title>
+    <meta name="theme-color" content="#0f172a" />
+    <link rel="manifest" href="/repo-runner.webmanifest" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      :root {
+        --bg: #070b14;
+        --panel: #111827;
+        --panel-2: #0f172a;
+        --border: #243244;
+        --text: #e5ecf5;
+        --text-dim: #9db0c6;
+        --primary: #10b981;
+        --primary-dim: #0d9b6e;
+        --warn: #f59e0b;
+        --danger: #ef4444;
+        --mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+        --sans: 'Space Grotesk', 'Segoe UI', system-ui, sans-serif;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        font-family: var(--sans);
+        color: var(--text);
+        min-height: 100dvh;
+        overflow: hidden;
+        background:
+          radial-gradient(1200px 500px at 10% -5%, rgba(16, 185, 129, 0.16), transparent 60%),
+          radial-gradient(900px 400px at 95% 0%, rgba(59, 130, 246, 0.18), transparent 55%),
+          var(--bg);
+      }
+
+      .layout {
+        height: 100dvh;
+        padding: 18px;
+        display: grid;
+        gap: 14px;
+        grid-template-rows: auto minmax(0, 1fr);
+      }
+
+      .card {
+        background: linear-gradient(180deg, rgba(17, 24, 39, 0.92), rgba(15, 23, 42, 0.92));
+        border: 1px solid var(--border);
+        border-radius: 12px;
+      }
+
+      .topbar {
+        padding: 12px;
+        display: grid;
+        gap: 10px;
+      }
+
+      .title-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+      }
+
+      .title {
+        margin: 0;
+        font-size: 20px;
+        font-weight: 700;
+        letter-spacing: -0.02em;
+      }
+
+      .title small {
+        color: var(--text-dim);
+        font-size: 13px;
+        font-weight: 500;
+      }
+
+      .badge-row {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+
+      .badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        font-family: var(--mono);
+        font-size: 11px;
+        border-radius: 999px;
+        border: 1px solid var(--border);
+        padding: 5px 9px;
+        background: #0b1322;
+        color: var(--text-dim);
+      }
+
+      .badge.idle {
+        color: var(--text-dim);
+      }
+
+      .badge.busy {
+        color: var(--warn);
+        border-color: rgba(245, 158, 11, 0.35);
+      }
+
+      .badge.ok {
+        color: var(--primary);
+        border-color: rgba(16, 185, 129, 0.35);
+      }
+
+      .badge.warn {
+        color: var(--warn);
+        border-color: rgba(245, 158, 11, 0.35);
+      }
+
+      .badge.error {
+        color: var(--danger);
+        border-color: rgba(239, 68, 68, 0.35);
+      }
+
+      .controls {
+        display: grid;
+        gap: 8px;
+        grid-template-columns: 1fr auto auto;
+      }
+
+      .path-controls {
+        display: grid;
+        gap: 8px;
+        grid-template-columns: auto auto auto 1fr auto;
+      }
+
+      input {
+        width: 100%;
+        min-height: 40px;
+        border-radius: 9px;
+        border: 1px solid var(--border);
+        background: #0b1322;
+        color: var(--text);
+        font-size: 14px;
+        font-family: var(--mono);
+        padding: 10px 12px;
+      }
+
+      input:focus {
+        outline: none;
+        border-color: rgba(16, 185, 129, 0.6);
+        box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.15);
+      }
+
+      button {
+        min-height: 40px;
+        border-radius: 9px;
+        border: 1px solid var(--border);
+        background: #1d293d;
+        color: var(--text);
+        font-family: var(--mono);
+        font-size: 12px;
+        padding: 0 12px;
+        cursor: pointer;
+      }
+
+      button:hover:not(:disabled) {
+        border-color: #355073;
+      }
+
+      button:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+      }
+
+      .button-primary {
+        background: linear-gradient(180deg, var(--primary), var(--primary-dim));
+        color: #03140d;
+        border-color: rgba(16, 185, 129, 0.5);
+        font-weight: 700;
+      }
+
+      .workspace {
+        display: grid;
+        gap: 12px;
+        grid-template-columns: 2fr 1fr;
+        min-height: 0;
+        overflow: hidden;
+      }
+
+      .preview-panel {
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+      }
+
+      .preview-empty {
+        flex: 1;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: var(--text-dim);
+        font-family: var(--mono);
+        font-size: 13px;
+        padding: 20px;
+        text-align: center;
+      }
+
+      iframe {
+        flex: 1;
+        width: 100%;
+        border: none;
+        background: #fff;
+        border-top: 1px solid var(--border);
+      }
+
+      .logs-panel {
+        display: flex;
+        flex-direction: column;
+        min-height: 0;
+        overflow: hidden;
+      }
+
+      .panel-title {
+        margin: 0;
+        padding: 11px 12px;
+        border-bottom: 1px solid var(--border);
+        font-family: var(--mono);
+        font-size: 12px;
+        letter-spacing: 0.02em;
+        color: var(--text-dim);
+      }
+
+      .logs {
+        flex: 1;
+        min-height: 0;
+        overflow: auto;
+        padding: 10px 12px;
+        font-family: var(--mono);
+        font-size: 12px;
+      }
+
+      .log-line {
+        margin-bottom: 6px;
+        line-height: 1.35;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+
+      .log-line.info { color: #b6c6da; }
+      .log-line.success { color: #75d8b4; }
+      .log-line.warn { color: #f2bd5f; }
+      .log-line.error { color: #f19696; }
+
+      @media (max-width: 1040px) {
+        .workspace {
+          grid-template-columns: 1fr;
+          grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
+        }
+      }
+
+      @media (max-width: 760px) {
+        .controls {
+          grid-template-columns: 1fr;
+        }
+
+        .path-controls {
+          grid-template-columns: auto auto auto 1fr auto;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="layout">
+      <section class="card topbar">
+        <div class="title-row">
+          <h1 class="title">almostbun Repo Runner <small>offline-ready app shell</small></h1>
+          <div class="badge-row">
+            <span id="status-badge" class="badge idle">Idle</span>
+            <span id="framework-badge" class="badge">Not started</span>
+            <span id="network-badge" class="badge">Online</span>
+          </div>
+        </div>
+
+        <div class="controls">
+          <input
+            id="repo-url"
+            type="text"
+            spellcheck="false"
+            placeholder="https://github.com/owner/repo or https://github.com/owner/repo/tree/main/subdir"
+          />
+          <button id="run-button" class="button-primary">Run</button>
+          <button id="stop-button" disabled>Stop</button>
+        </div>
+
+        <div class="path-controls">
+          <button id="back-button" title="Back">Back</button>
+          <button id="refresh-button" title="Reload">Reload</button>
+          <span class="badge">Path</span>
+          <input id="app-path" type="text" spellcheck="false" value="/" placeholder="/about?x=1" />
+          <button id="go-button" disabled>Go</button>
+        </div>
+      </section>
+
+      <section class="workspace">
+        <article class="card preview-panel">
+          <h2 class="panel-title">App Preview</h2>
+          <div id="preview-empty" class="preview-empty">
+            Import and run a repo to render it here.
+          </div>
+          <iframe id="preview-frame" title="Project preview" style="display: none"></iframe>
+        </article>
+
+        <aside class="card logs-panel">
+          <h2 class="panel-title">Logs</h2>
+          <div id="logs" class="logs"></div>
+        </aside>
+      </section>
+    </main>
+
+    <script type="module" src="/src/repo-runner-demo.ts"></script>
+  </body>
+</html>

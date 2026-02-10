@@ -26,6 +26,29 @@ export * as querystring from './shims/querystring';
 export * as util from './shims/util';
 export * as npm from './npm';
 export { PackageManager, install } from './npm';
+export * as repo from './repo';
+export { parseGitHubRepoUrl, importGitHubRepo, bootstrapGitHubProject } from './repo';
+export type {
+  ParsedGitHubRepoUrl,
+  ImportGitHubRepoOptions,
+  ImportGitHubRepoResult,
+  BootstrapGitHubProjectOptions,
+  BootstrapGitHubProjectResult,
+} from './repo';
+export {
+  detectRunnableProject,
+  startDetectedProject,
+  bootstrapAndRunGitHubProject,
+} from './repo';
+export type {
+  RunnableProjectKind,
+  DetectRunnableProjectOptions,
+  DetectedRunnableProject,
+  StartDetectedProjectOptions,
+  RunningProject,
+  BootstrapAndRunOptions,
+  BootstrapAndRunResult,
+} from './repo';
 export { ServerBridge, getServerBridge, resetServerBridge } from './server-bridge';
 export type { InitServiceWorkerOptions } from './server-bridge';
 // Dev servers
@@ -35,6 +58,8 @@ export { ViteDevServer } from './frameworks/vite-dev-server';
 export type { ViteDevServerOptions } from './frameworks/vite-dev-server';
 export { NextDevServer } from './frameworks/next-dev-server';
 export type { NextDevServerOptions } from './frameworks/next-dev-server';
+export { ModernJsDistServer } from './frameworks/modernjs-dist-server';
+export type { ModernJsDistServerOptions } from './frameworks/modernjs-dist-server';
 // New shims for Vite support
 export * as chokidar from './shims/chokidar';
 export * as ws from './shims/ws';
@@ -46,6 +71,13 @@ export * as worker_threads from './shims/worker_threads';
 export * as esbuild from './shims/esbuild';
 export * as rollup from './shims/rollup';
 export * as assert from './shims/assert';
+export * as bun from './shims/bun';
+export * as bun_sqlite from './shims/bun-sqlite';
+export * as bun_test from './shims/bun-test';
+export * as bun_ffi from './shims/bun-ffi';
+export * as bun_jsc from './shims/bun-jsc';
+export * as modernjs_effect_client from './shims/modernjs-effect-client';
+export * as modernjs_effect_server from './shims/modernjs-effect-server';
 
 // Demo exports
 export {

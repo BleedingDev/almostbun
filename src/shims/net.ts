@@ -24,7 +24,7 @@ export interface ServerOptions {
 }
 
 export interface ListenOptions {
-  port?: number;
+  port?: number | string;
   host?: string;
   backlog?: number;
 }
@@ -198,7 +198,7 @@ export class Server extends EventEmitter {
   }
 
   listen(
-    portOrOptions?: number | ListenOptions,
+    portOrOptions?: number | string | ListenOptions,
     hostOrCallback?: string | number | (() => void),
     backlogOrCallback?: number | (() => void),
     callback?: () => void
@@ -207,8 +207,13 @@ export class Server extends EventEmitter {
     let host: string = '0.0.0.0';
     let cb: (() => void) | undefined;
 
-    if (typeof portOrOptions === 'number') {
-      port = portOrOptions;
+    if (typeof portOrOptions === 'number' || typeof portOrOptions === 'string') {
+      const parsedPort = typeof portOrOptions === 'string'
+        ? Number.parseInt(portOrOptions, 10)
+        : portOrOptions;
+      if (Number.isFinite(parsedPort)) {
+        port = parsedPort;
+      }
 
       if (typeof hostOrCallback === 'string') {
         host = hostOrCallback;
@@ -230,10 +235,24 @@ export class Server extends EventEmitter {
           cb = callback;
         }
       }
-    } else if (portOrOptions) {
-      port = portOrOptions.port || 0;
+    } else if (portOrOptions && typeof portOrOptions === 'object') {
+      const optionPort = portOrOptions.port;
+      if (typeof optionPort === 'number') {
+        port = optionPort;
+      } else if (typeof optionPort === 'string') {
+        const parsedPort = Number.parseInt(optionPort, 10);
+        port = Number.isFinite(parsedPort) ? parsedPort : 0;
+      }
       host = portOrOptions.host || '0.0.0.0';
       cb = typeof hostOrCallback === 'function' ? hostOrCallback : callback;
+    } else {
+      if (typeof hostOrCallback === 'function') {
+        cb = hostOrCallback;
+      } else if (typeof backlogOrCallback === 'function') {
+        cb = backlogOrCallback;
+      } else if (typeof callback === 'function') {
+        cb = callback;
+      }
     }
 
     // Assign random port if 0

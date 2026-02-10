@@ -436,12 +436,32 @@ export class Transform extends Duplex {
   }
 }
 
-// Base Stream class that some code extends
-export class Stream extends EventEmitter {
-  pipe<T extends Writable>(destination: T): T {
-    return destination;
-  }
-}
+// Base Stream constructor that is both `new`-able and callable via `.call(this)`.
+// Older Node packages still do `Stream.call(this)` in constructors.
+type LegacyStreamInstance = EventEmitter & {
+  pipe<T extends Writable>(destination: T): T;
+};
+
+type LegacyStreamConstructor = {
+  new (): LegacyStreamInstance;
+  (this: LegacyStreamInstance): void;
+  prototype: LegacyStreamInstance;
+};
+
+export const Stream: LegacyStreamConstructor = function LegacyStream(this: LegacyStreamInstance): void {
+  // EventEmitter lazily initializes internal storage, so no explicit super call is required.
+} as unknown as LegacyStreamConstructor;
+
+Object.setPrototypeOf(Stream.prototype, EventEmitter.prototype);
+Object.defineProperty(Stream.prototype, 'constructor', {
+  value: Stream,
+  writable: true,
+  configurable: true,
+});
+
+Stream.prototype.pipe = function <T extends Writable>(destination: T): T {
+  return destination;
+};
 
 // Make Stream also have static references to all stream types
 // This allows: const Stream = require('stream'); class X extends Stream {}

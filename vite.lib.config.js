@@ -11,6 +11,21 @@ export default defineConfig({
       name: 'browser-shims',
       enforce: 'pre',
       resolveId(source) {
+        if (source === 'bun') {
+          return resolve(__dirname, 'src/shims/bun.ts');
+        }
+        if (source === 'bun:sqlite') {
+          return resolve(__dirname, 'src/shims/bun-sqlite.ts');
+        }
+        if (source === 'bun:test') {
+          return resolve(__dirname, 'src/shims/bun-test.ts');
+        }
+        if (source === 'bun:ffi') {
+          return resolve(__dirname, 'src/shims/bun-ffi.ts');
+        }
+        if (source === 'bun:jsc') {
+          return resolve(__dirname, 'src/shims/bun-jsc.ts');
+        }
         if (source === 'node:zlib' || source === 'zlib') {
           return resolve(__dirname, 'src/shims/zlib.ts');
         }
@@ -35,6 +50,11 @@ export default defineConfig({
     alias: {
       'node:zlib': resolve(__dirname, 'src/shims/zlib.ts'),
       'zlib': resolve(__dirname, 'src/shims/zlib.ts'),
+      'bun': resolve(__dirname, 'src/shims/bun.ts'),
+      'bun:sqlite': resolve(__dirname, 'src/shims/bun-sqlite.ts'),
+      'bun:test': resolve(__dirname, 'src/shims/bun-test.ts'),
+      'bun:ffi': resolve(__dirname, 'src/shims/bun-ffi.ts'),
+      'bun:jsc': resolve(__dirname, 'src/shims/bun-jsc.ts'),
       'buffer': 'buffer',
       'process': 'process/browser',
     },

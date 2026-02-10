@@ -401,7 +401,7 @@ export function createFsShim(vfs: VirtualFS, getCwd?: () => string): FsShim {
     },
   } as FsPromises;
 
-  return {
+  const fsShim = {
     readFileSync(
       pathLike: unknown,
       encodingOrOptions?: string | { encoding?: string | null }
@@ -795,7 +795,26 @@ export function createFsShim(vfs: VirtualFS, getCwd?: () => string): FsShim {
 
     promises,
     constants,
-  } as FsShim;
+  } as FsShim & {
+    realpath: FsShim['realpath'] & { native?: FsShim['realpath'] };
+    realpathSync: FsShim['realpathSync'] & { native?: FsShim['realpathSync'] };
+  };
+
+  // Node exposes fs.realpath.native / fs.realpathSync.native.
+  // fs-extra/graceful-fs relies on these properties when wrapping callbacks.
+  const realpath = fsShim.realpath.bind(fsShim) as FsShim['realpath'] & {
+    native?: FsShim['realpath'];
+  };
+  realpath.native = realpath;
+  fsShim.realpath = realpath;
+
+  const realpathSync = fsShim.realpathSync.bind(fsShim) as FsShim['realpathSync'] & {
+    native?: FsShim['realpathSync'];
+  };
+  realpathSync.native = realpathSync;
+  fsShim.realpathSync = realpathSync;
+
+  return fsShim as FsShim;
 }
 
 export default createFsShim;

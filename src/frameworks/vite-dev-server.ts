@@ -6,8 +6,15 @@
 import { DevServer, DevServerOptions, ResponseData, HMRUpdate } from '../dev-server';
 import { VirtualFS } from '../virtual-fs';
 import { Buffer } from '../shims/stream';
+import { getServer } from '../shims/http';
 import { simpleHash } from '../utils/hash';
+import * as path from '../shims/path';
 import { addReactRefresh as _addReactRefresh } from './code-transforms';
+import {
+  redirectNpmImports as _redirectNpmImports,
+  stripCssImports as _stripCssImports,
+  type CssModuleContext,
+} from './code-transforms';
 
 // Check if we're in a real browser environment (not jsdom or Node.js)
 // jsdom has window but doesn't have ServiceWorker or SharedArrayBuffer
@@ -96,6 +103,17 @@ export interface ViteDevServerOptions extends DevServerOptions {
    * Auto-inject React import for JSX files (default: true)
    */
   jsxAutoImport?: boolean;
+
+  /**
+   * Disable HMR/React Refresh HTML + module injection.
+   * Useful for compatibility with third-party templates that rely on plain Vite HTML semantics.
+   */
+  disableHmrInjection?: boolean;
+
+  /**
+   * Optional runtime server port used to proxy API calls (e.g. /api/*) for full-stack Vite apps.
+   */
+  apiProxyPort?: number;
 }
 
 /**
@@ -282,6 +300,15 @@ export class ViteDevServer extends DevServer {
   private options: ViteDevServerOptions;
   private hmrTargetWindow: Window | null = null;
   private transformCache: Map<string, { code: string; hash: string }> = new Map();
+  private pathAliases: Map<string, string> = new Map();
+  private jsxImportSource = 'react';
+  private reactVersion = '18.2.0';
+  private reactDomVersion = '18.2.0';
+  private vueCompilerSfcPromise: Promise<any> | null = null;
+  private svelteCompilerPromise: Promise<any> | null = null;
+  private syntheticIndexEntry: string | null = null;
+  private syntheticTanstackRouterEntry: string | null = null;
+  private apiProxyPort: number | null = null;
 
   constructor(vfs: VirtualFS, options: ViteDevServerOptions) {
     super(vfs, options);
@@ -290,8 +317,14 @@ export class ViteDevServer extends DevServer {
       jsxFactory: 'React.createElement',
       jsxFragment: 'React.Fragment',
       jsxAutoImport: true,
+      disableHmrInjection: false,
       ...options,
     };
+    this.jsxImportSource = this.detectJsxImportSource();
+    this.detectReactVersions();
+    this.loadPathAliases();
+    this.syntheticIndexEntry = this.detectSyntheticIndexEntry();
+    this.apiProxyPort = typeof this.options.apiProxyPort === 'number' ? this.options.apiProxyPort : null;
   }
 
   /**
@@ -315,36 +348,78 @@ export class ViteDevServer extends DevServer {
     const urlObj = new URL(url, 'http://localhost');
     let pathname = urlObj.pathname;
 
+    if (this.shouldProxyApiRequest(pathname)) {
+      return this.proxyApiRequest(method, `${pathname}${urlObj.search}`, headers, body);
+    }
+
     // Handle root path - serve index.html
     if (pathname === '/') {
       pathname = '/index.html';
     }
 
+    if (pathname === '/@almostbun/tanstack-start-client-entry.js') {
+      return this.serveTanstackStartClientEntryModule();
+    }
+
     // Resolve the full path
-    const filePath = this.resolvePath(pathname);
+    let isFsPathRequest = false;
+    let filePath: string;
+    if (pathname.startsWith('/@fs/')) {
+      isFsPathRequest = true;
+      filePath = `/${pathname.slice('/@fs/'.length)}`.replace(/\/+/g, '/');
+    } else {
+      filePath = this.resolvePath(pathname);
+    }
 
     // Check if file exists
     if (!this.exists(filePath)) {
+      const resolved = this.resolveFileWithExtension(filePath);
+      if (resolved) {
+        filePath = resolved;
+        pathname = this.toRequestPath(filePath);
+        isFsPathRequest = pathname.startsWith('/@fs/');
+      } else {
       // Try with .html extension
       if (this.exists(filePath + '.html')) {
-        return this.serveFile(filePath + '.html');
+        return this.serveFile(pathname + '.html');
       }
       // Try index.html in directory
       if (this.isDirectory(filePath) && this.exists(filePath + '/index.html')) {
-        return this.serveFile(filePath + '/index.html');
+        return this.serveFile(pathname.endsWith('/') ? `${pathname}index.html` : `${pathname}/index.html`);
       }
-      return this.notFound(pathname);
+      // Try extension resolution under "/index" for path-like requests
+      const indexResolved = this.resolveFileWithExtension(`${filePath}/index`);
+      if (indexResolved) {
+        filePath = indexResolved;
+        pathname = this.toRequestPath(filePath);
+      } else {
+        const syntheticIndexEntry = this.getSyntheticIndexEntryForPath(pathname);
+        if (syntheticIndexEntry) {
+          return this.serveSyntheticIndexWithHMR(syntheticIndexEntry);
+        }
+        return this.notFound(pathname);
+      }
+      }
     }
 
     // If it's a directory, redirect to index.html
     if (this.isDirectory(filePath)) {
-      if (this.exists(filePath + '/index.html')) {
+      // TanStack/route-based apps can have both:
+      // - a directory `/routes/foo/`
+      // - a file `/routes/foo.tsx`
+      // Prefer the extension-resolved file when it exists.
+      const siblingResolved = this.resolveFileWithExtension(filePath);
+      if (siblingResolved && siblingResolved !== filePath) {
+        filePath = siblingResolved;
+        pathname = this.toRequestPath(filePath);
+      } else if (this.exists(filePath + '/index.html')) {
         return this.serveFile(filePath + '/index.html');
+      } else {
+        return this.notFound(pathname);
       }
-      return this.notFound(pathname);
     }
 
-    // Check if file needs transformation (JSX/TS)
+    // Check if file needs transformation (JSX/TS/SFC)
     if (this.needsTransform(pathname)) {
       return this.transformAndServe(filePath, pathname);
     }
@@ -352,27 +427,19 @@ export class ViteDevServer extends DevServer {
     // Check if CSS is being imported as a module (needs to be converted to JS)
     // In browser context with ES modules, CSS imports need to be served as JS
     if (pathname.endsWith('.css')) {
-      // Check various header formats for sec-fetch-dest
-      const secFetchDest =
-        headers['sec-fetch-dest'] ||
-        headers['Sec-Fetch-Dest'] ||
-        headers['SEC-FETCH-DEST'] ||
-        '';
-
-      // In browser, serve CSS as module when:
-      // 1. Requested as a script (sec-fetch-dest: script)
-      // 2. Empty dest (sec-fetch-dest: empty) - fetch() calls
-      // 3. No sec-fetch-dest but in browser context - assume module import
-      const isModuleImport =
-        secFetchDest === 'script' ||
-        secFetchDest === 'empty' ||
-        (isBrowser && secFetchDest === '');
-
-      if (isModuleImport) {
+      if (this.isModuleRequest(headers)) {
         return this.serveCssAsModule(filePath);
       }
       // Otherwise serve as regular CSS (e.g., <link> tags with sec-fetch-dest: style)
-      return this.serveFile(filePath);
+      return isFsPathRequest ? this.serveAbsoluteFile(filePath) : this.serveFile(pathname);
+    }
+
+    if (this.isAssetPath(pathname) && this.isModuleRequest(headers)) {
+      return this.serveAssetAsModule(pathname);
+    }
+
+    if (pathname.endsWith('.json') && this.isModuleRequest(headers)) {
+      return this.serveJsonAsModule(filePath);
     }
 
     // Check if it's HTML that needs HMR client injection
@@ -381,7 +448,7 @@ export class ViteDevServer extends DevServer {
     }
 
     // Serve static file
-    return this.serveFile(filePath);
+    return isFsPathRequest ? this.serveAbsoluteFile(filePath) : this.serveFile(pathname);
   }
 
   /**
@@ -472,7 +539,7 @@ export class ViteDevServer extends DevServer {
    * Check if a file needs transformation
    */
   private needsTransform(path: string): boolean {
-    return /\.(jsx|tsx|ts)$/.test(path);
+    return /\.(jsx|tsx|ts|vue|svelte)$/.test(path);
   }
 
   /**
@@ -501,7 +568,11 @@ export class ViteDevServer extends DevServer {
         };
       }
 
-      const transformed = await this.transformCode(content, urlPath);
+      const transformed = filePath.endsWith('.vue')
+        ? await this.transformVueSfc(content, filePath, urlPath)
+        : filePath.endsWith('.svelte')
+          ? await this.transformSvelteComponent(content, filePath, urlPath)
+        : await this.transformCode(content, urlPath);
 
       // Cache the transform result
       this.transformCache.set(filePath, { code: transformed, hash });
@@ -534,13 +605,250 @@ export class ViteDevServer extends DevServer {
     }
   }
 
+  private async getVueCompilerSfc(): Promise<any | null> {
+    if (!isBrowser) {
+      return null;
+    }
+
+    if (!this.vueCompilerSfcPromise) {
+      this.vueCompilerSfcPromise = import(
+        /* @vite-ignore */
+        'https://esm.sh/@vue/compiler-sfc@3.5.28'
+      )
+        .then((mod) => mod.default || mod)
+        .catch((error) => {
+          console.error('[ViteDevServer] Failed to load @vue/compiler-sfc:', error);
+          return null;
+        });
+    }
+
+    return this.vueCompilerSfcPromise;
+  }
+
+  private normalizeVueCompilerErrors(errors: unknown[]): string {
+    return errors
+      .map((error) => {
+        if (typeof error === 'string') return error;
+        if (error instanceof Error) return error.message;
+        try {
+          return JSON.stringify(error);
+        } catch {
+          return String(error);
+        }
+      })
+      .join('\n');
+  }
+
+  private async transformVueSfc(source: string, filePath: string, urlPath: string): Promise<string> {
+    const compiler = await this.getVueCompilerSfc();
+    if (!compiler) {
+      return this.transformCode('const __sfc__ = {};\nexport default __sfc__;\n', `${urlPath}.ts`);
+    }
+
+    const parsed = compiler.parse(source, { filename: filePath });
+    const descriptor = parsed?.descriptor;
+    const parseErrors = Array.isArray(parsed?.errors) ? parsed.errors : [];
+    if (parseErrors.length > 0) {
+      throw new Error(this.normalizeVueCompilerErrors(parseErrors));
+    }
+
+    if (!descriptor) {
+      throw new Error(`Invalid Vue SFC: ${filePath}`);
+    }
+
+    const scopeHash = simpleHash(filePath).slice(0, 8);
+    const scopeId = `data-v-${scopeHash}`;
+    const hasScopedStyle = Array.isArray(descriptor.styles) && descriptor.styles.some((style: any) => Boolean(style?.scoped));
+    let bindingMetadata: Record<string, unknown> | undefined;
+
+    let code = '';
+
+    if (descriptor.script || descriptor.scriptSetup) {
+      const compiledScript = compiler.compileScript(descriptor, {
+        id: scopeId,
+        genDefaultAs: '__sfc__',
+      });
+      bindingMetadata = compiledScript.bindings;
+      code += `${compiledScript.content}\n`;
+    } else {
+      code += 'const __sfc__ = {};\n';
+    }
+
+    if (descriptor.template?.content) {
+      const templateResult = compiler.compileTemplate({
+        source: descriptor.template.content,
+        filename: filePath,
+        id: scopeId,
+        scoped: hasScopedStyle,
+        compilerOptions: {
+          mode: 'module',
+          bindingMetadata,
+        },
+      });
+      const templateErrors = Array.isArray(templateResult?.errors) ? templateResult.errors : [];
+      if (templateErrors.length > 0) {
+        throw new Error(this.normalizeVueCompilerErrors(templateErrors));
+      }
+      code += `${templateResult.code}\n`;
+      code += '__sfc__.render = render;\n';
+    }
+
+    const styles = Array.isArray(descriptor.styles) ? descriptor.styles : [];
+    styles.forEach((style: any, index: number) => {
+      const styleResult = compiler.compileStyle({
+        source: style?.content || '',
+        filename: filePath,
+        id: scopeId,
+        scoped: Boolean(style?.scoped),
+      });
+      const styleErrors = Array.isArray(styleResult?.errors) ? styleResult.errors : [];
+      if (styleErrors.length > 0) {
+        throw new Error(this.normalizeVueCompilerErrors(styleErrors));
+      }
+
+      const styleKey = `${filePath}:${index}`;
+      const styleMarker = `almostbun-vue-style-${simpleHash(styleKey).slice(0, 12)}`;
+      code += `
+if (typeof document !== 'undefined' && !document.getElementById(${JSON.stringify(styleMarker)})) {
+  const style = document.createElement('style');
+  style.id = ${JSON.stringify(styleMarker)};
+  style.setAttribute('data-almostbun-vue-style', ${JSON.stringify(styleKey)});
+  style.textContent = ${JSON.stringify(styleResult.code)};
+  document.head.appendChild(style);
+}
+`;
+    });
+
+    if (hasScopedStyle) {
+      code += `__sfc__.__scopeId = ${JSON.stringify(scopeId)};\n`;
+    }
+
+    code += 'export default __sfc__;\n';
+
+    // Feed generated module through the standard transform pipeline
+    // (path aliases, bare import redirects, import.meta.env).
+    return this.transformCode(code, `${urlPath}.ts`);
+  }
+
+  private async getSvelteCompiler(): Promise<any | null> {
+    if (!isBrowser) {
+      return null;
+    }
+
+    if (!this.svelteCompilerPromise) {
+      this.svelteCompilerPromise = import(
+        /* @vite-ignore */
+        'https://esm.sh/svelte@5.39.6/compiler'
+      )
+        .then((mod) => mod.default || mod)
+        .catch((error) => {
+          console.error('[ViteDevServer] Failed to load Svelte compiler:', error);
+          return null;
+        });
+    }
+
+    return this.svelteCompilerPromise;
+  }
+
+  private async maybeTranspileSvelteTypeScript(source: string, filePath: string): Promise<string> {
+    const scriptMatch = source.match(/<script\b([^>]*)>([\s\S]*?)<\/script>/i);
+    if (!scriptMatch) {
+      return source;
+    }
+
+    const attributes = scriptMatch[1] || '';
+    if (!/\blang\s*=\s*['"]ts['"]/i.test(attributes)) {
+      return source;
+    }
+
+    if (!isBrowser) {
+      return source;
+    }
+
+    await initEsbuild();
+    const esbuild = getEsbuild();
+    if (!esbuild) {
+      return source;
+    }
+
+    const transpiled = await esbuild.transform(scriptMatch[2], {
+      loader: 'ts',
+      format: 'esm',
+      target: 'esnext',
+      sourcefile: `${filePath}?svelte-script.ts`,
+      sourcemap: false,
+    });
+
+    const cleanedAttributes = attributes
+      .replace(/\blang\s*=\s*['"]ts['"]/i, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+    const replacement = `<script${cleanedAttributes ? ` ${cleanedAttributes}` : ''}>\n${transpiled.code}\n</script>`;
+    return source.replace(scriptMatch[0], replacement);
+  }
+
+  private async transformSvelteComponent(source: string, filePath: string, urlPath: string): Promise<string> {
+    const compiler = await this.getSvelteCompiler();
+    if (!compiler || typeof compiler.compile !== 'function') {
+      return this.transformCode('export default {};\n', `${urlPath}.js`);
+    }
+
+    const preparedSource = await this.maybeTranspileSvelteTypeScript(source, filePath);
+
+    let result: any;
+    try {
+      result = compiler.compile(preparedSource, {
+        filename: filePath,
+        generate: 'client',
+        css: 'injected',
+        dev: true,
+      });
+    } catch {
+      result = compiler.compile(preparedSource, {
+        filename: filePath,
+        generate: 'dom',
+        css: 'injected',
+        dev: true,
+      });
+    }
+
+    const warnings = Array.isArray(result?.warnings) ? result.warnings : [];
+    warnings.forEach((warning: any) => {
+      if (warning?.message) {
+        console.warn(`[ViteDevServer] Svelte warning (${filePath}): ${warning.message}`);
+      }
+    });
+
+    const jsCode = result?.js?.code;
+    if (typeof jsCode !== 'string' || jsCode.length === 0) {
+      throw new Error(`Svelte compile produced no JS output: ${filePath}`);
+    }
+
+    return this.transformCode(jsCode, `${urlPath}.js`);
+  }
+
   /**
    * Transform JSX/TS code to browser-compatible JavaScript
    */
   private async transformCode(code: string, filename: string): Promise<string> {
+    const codeWithTanstackClientFallback = this.rewriteTanstackStartClientModule(code, filename);
+    const codeWithTanstackRouterBasepath = this.rewriteTanstackRouterBasepath(
+      codeWithTanstackClientFallback,
+      filename
+    );
+
     if (!isBrowser) {
-      // In test environment, just return code as-is
-      return code;
+      // In non-browser environments (tests/node), esbuild isn't available.
+      // Still run alias/special import rewrites so resolution behavior matches browser mode.
+      const codeWithoutCssImports = this.stripCssImports(codeWithTanstackRouterBasepath, filename);
+      const codeWithResolvedAliases = this.resolvePathAliases(codeWithoutCssImports, filename);
+      const codeWithResolvedSpecialImports = this.resolveSpecialBareImports(
+        codeWithResolvedAliases,
+        filename
+      );
+      const codeWithEnv = this.injectImportMetaEnv(codeWithResolvedSpecialImports);
+      return this.redirectNpmImports(codeWithEnv);
     }
 
     // Initialize esbuild if needed
@@ -557,26 +865,580 @@ export class ViteDevServer extends DevServer {
     else if (filename.endsWith('.tsx')) loader = 'tsx';
     else if (filename.endsWith('.ts')) loader = 'ts';
 
-    const result = await esbuild.transform(code, {
-      loader,
-      format: 'esm', // Keep as ES modules for browser
-      target: 'esnext',
-      jsx: 'automatic', // Use React 17+ automatic runtime
-      jsxImportSource: 'react',
-      sourcemap: 'inline',
-      sourcefile: filename,
-    });
+    const codeWithoutCssImports = this.stripCssImports(codeWithTanstackRouterBasepath, filename);
+    const codeWithResolvedAliases = this.resolvePathAliases(codeWithoutCssImports, filename);
+    const codeWithResolvedSpecialImports = this.resolveSpecialBareImports(
+      codeWithResolvedAliases,
+      filename
+    );
 
-    // Add React Refresh registration for JSX/TSX files
-    if (/\.(jsx|tsx)$/.test(filename)) {
-      return this.addReactRefresh(result.code, filename);
+    const shouldUseSolidHyperscriptTransform =
+      this.jsxImportSource === 'solid-js' && (loader === 'jsx' || loader === 'tsx');
+
+    const result = await esbuild.transform(codeWithResolvedSpecialImports, shouldUseSolidHyperscriptTransform
+      ? {
+          loader,
+          format: 'esm',
+          target: 'esnext',
+          jsx: 'transform',
+          jsxFactory: 'h',
+          jsxFragment: 'Fragment',
+          sourcemap: 'inline',
+          sourcefile: filename,
+        }
+      : {
+          loader,
+          format: 'esm', // Keep as ES modules for browser
+          target: 'esnext',
+          jsx: 'automatic', // Use React 17+ automatic runtime
+          jsxImportSource: this.jsxImportSource,
+          sourcemap: 'inline',
+          sourcefile: filename,
+        });
+
+    let transformedCode = result.code;
+    if (
+      shouldUseSolidHyperscriptTransform &&
+      !/from\s+['"]solid-js\/h['"]/.test(transformedCode)
+    ) {
+      transformedCode = `import h from 'solid-js/h';\nconst Fragment = (props) => props?.children ?? null;\n${transformedCode}`;
     }
 
-    return result.code;
+    const codeWithEnv = this.injectImportMetaEnv(transformedCode);
+    const codeWithCdnImports = this.redirectNpmImports(codeWithEnv);
+
+    // Add React Refresh registration for JSX/TSX files unless explicitly disabled.
+    if (!this.options.disableHmrInjection && /\.(jsx|tsx)$/.test(filename)) {
+      return this.addReactRefresh(codeWithCdnImports, filename);
+    }
+
+    return codeWithCdnImports;
+  }
+
+  private rewriteTanstackStartClientModule(code: string, filename: string): string {
+    if (!/\/src\/client\.(?:tsx|jsx|ts|js)$/.test(filename)) {
+      return code;
+    }
+    if (!code.includes('@tanstack/react-start') || !code.includes('StartClient')) {
+      return code;
+    }
+
+    let rewritten = code;
+    rewritten = rewritten.replace(
+      /import\s+\{\s*hydrateRoot\s*\}\s+from\s+['"]react-dom\/client['"]\s*;?/,
+      "import { createRoot } from 'react-dom/client';"
+    );
+    rewritten = rewritten.replace(
+      /import\s+\{\s*StartClient\s*\}\s+from\s+['"]@tanstack\/react-start['"]\s*;?/,
+      "import { RouterProvider } from '@tanstack/react-router';"
+    );
+    rewritten = rewritten.replace(/\bStartClient\b/g, 'RouterProvider');
+    rewritten = rewritten.replace(
+      /hydrateRoot\s*\(\s*document\s*,/g,
+      "createRoot(document.getElementById('root') || document.body).render("
+    );
+
+    return rewritten;
+  }
+
+  private rewriteTanstackRouterBasepath(code: string, _filename: string): string {
+    if (!code.includes('@tanstack/react-router') || !code.includes('createRouter')) {
+      return code;
+    }
+
+    if (!/\bcreateRouter\s*\(\s*\{/.test(code)) {
+      return code;
+    }
+
+    // Respect user-defined base path settings.
+    if (/\bcreateRouter\s*\(\s*\{[\s\S]*?\b(?:basepath|basename)\s*:/.test(code)) {
+      return code;
+    }
+
+    const injection = `createRouter({
+  ...((typeof window !== 'undefined' && window.location.pathname.match(/^\\/__virtual__\\/\\d+/))
+    ? { basepath: window.location.pathname.match(/^\\/__virtual__\\/\\d+/)[0] }
+    : {}),
+`;
+
+    return code.replace(/\bcreateRouter\s*\(\s*\{/, injection);
   }
 
   private addReactRefresh(code: string, filename: string): string {
     return _addReactRefresh(code, filename);
+  }
+
+  private shouldProxyApiRequest(pathname: string): boolean {
+    if (!this.apiProxyPort) {
+      return false;
+    }
+    return pathname === '/api' || pathname.startsWith('/api/');
+  }
+
+  private async proxyApiRequest(
+    method: string,
+    targetPath: string,
+    headers: Record<string, string>,
+    body?: Buffer
+  ): Promise<ResponseData> {
+    if (!this.apiProxyPort) {
+      return this.notFound(targetPath);
+    }
+
+    const runtimeServer = getServer(this.apiProxyPort);
+    if (!runtimeServer || typeof runtimeServer.handleRequest !== 'function') {
+      return this.notFound(targetPath);
+    }
+
+    try {
+      return await runtimeServer.handleRequest(method, targetPath, headers, body);
+    } catch (error) {
+      return this.serverError(error);
+    }
+  }
+
+  private redirectNpmImports(code: string): string {
+    const redirected = _redirectNpmImports(code);
+    return this.applyReactVersionMappings(redirected);
+  }
+
+  private applyReactVersionMappings(code: string): string {
+    return code
+      .replace(/https:\/\/esm\.sh\/react@18\.2\.0\?dev/g, `https://esm.sh/react@${this.reactVersion}?dev`)
+      .replace(/https:\/\/esm\.sh\/react@18\.2\.0&dev\/jsx-runtime/g, `https://esm.sh/react@${this.reactVersion}&dev/jsx-runtime`)
+      .replace(/https:\/\/esm\.sh\/react@18\.2\.0&dev\/jsx-dev-runtime/g, `https://esm.sh/react@${this.reactVersion}&dev/jsx-dev-runtime`)
+      .replace(/https:\/\/esm\.sh\/react-dom@18\.2\.0\?dev/g, `https://esm.sh/react-dom@${this.reactDomVersion}?dev`)
+      .replace(/https:\/\/esm\.sh\/react-dom@18\.2\.0\/client\?dev/g, `https://esm.sh/react-dom@${this.reactDomVersion}/client?dev`);
+  }
+
+  private stripCssImports(code: string, currentFile?: string): string {
+    return _stripCssImports(code, currentFile, this.getCssModuleContext());
+  }
+
+  private getCssModuleContext(): CssModuleContext {
+    return {
+      readFile: (filePath: string) => this.vfs.readFileSync(filePath, 'utf-8'),
+      exists: (filePath: string) => this.exists(filePath),
+    };
+  }
+
+  private resolveFileWithExtension(filePath: string): string | null {
+    if (/\.\w+$/.test(filePath) && this.exists(filePath)) {
+      return filePath;
+    }
+
+    const extensions = ['.tsx', '.ts', '.jsx', '.js', '.mjs', '.cjs', '.json', '.vue', '.svelte'];
+    const hasJsLikeExtension = /\.(?:mjs|cjs|js)$/.test(filePath);
+
+    if (hasJsLikeExtension) {
+      const base = filePath.replace(/\.(?:mjs|cjs|js)$/, '');
+      for (const ext of ['.tsx', '.ts', '.jsx', '.js', '.mjs', '.cjs']) {
+        const candidate = `${base}${ext}`;
+        if (this.exists(candidate)) {
+          return candidate;
+        }
+      }
+      for (const ext of ['.tsx', '.ts', '.jsx', '.js', '.mjs', '.cjs']) {
+        const candidate = `${base}/index${ext}`;
+        if (this.exists(candidate)) {
+          return candidate;
+        }
+      }
+    }
+
+    for (const ext of extensions) {
+      const candidate = `${filePath}${ext}`;
+      if (this.exists(candidate)) {
+        return candidate;
+      }
+    }
+
+    for (const ext of extensions) {
+      const candidate = `${filePath}/index${ext}`;
+      if (this.exists(candidate)) {
+        return candidate;
+      }
+    }
+
+    return null;
+  }
+
+  private detectJsxImportSource(): string {
+    try {
+      const packageJsonPath = path.posix.join(this.root, 'package.json');
+      if (!this.exists(packageJsonPath)) {
+        return 'react';
+      }
+
+      const raw = this.vfs.readFileSync(packageJsonPath, 'utf8');
+      const pkg = JSON.parse(raw) as {
+        dependencies?: Record<string, string>;
+        devDependencies?: Record<string, string>;
+      };
+      const names = new Set([
+        ...Object.keys(pkg.dependencies || {}),
+        ...Object.keys(pkg.devDependencies || {}),
+      ]);
+
+      if (names.has('preact')) {
+        return 'preact';
+      }
+      if (names.has('solid-js')) {
+        return 'solid-js';
+      }
+    } catch {
+      // Default to React when package metadata is unavailable.
+    }
+
+    return 'react';
+  }
+
+  private normalizeSemverVersion(range: string | undefined): string | null {
+    if (!range) {
+      return null;
+    }
+    const match = range.match(/(\d+\.\d+\.\d+)/);
+    if (!match) {
+      return null;
+    }
+
+    // For ranges (e.g. ^19.0.0), prefer major-channel URLs (react@19)
+    // to stay aligned with transitive packages that may resolve newer patches.
+    if (/[\^~><=*xX]|\\|\\|/.test(range)) {
+      return match[1].split('.')[0];
+    }
+
+    return match[1];
+  }
+
+  private detectReactVersions(): void {
+    try {
+      const packageJsonPath = path.posix.join(this.root, 'package.json');
+      if (!this.exists(packageJsonPath)) {
+        return;
+      }
+
+      const raw = this.vfs.readFileSync(packageJsonPath, 'utf8');
+      const pkg = JSON.parse(raw) as {
+        dependencies?: Record<string, string>;
+        devDependencies?: Record<string, string>;
+      };
+      const deps = {
+        ...(pkg.dependencies || {}),
+        ...(pkg.devDependencies || {}),
+      };
+
+      const reactVersion = this.normalizeSemverVersion(deps.react);
+      const reactDomVersion = this.normalizeSemverVersion(deps['react-dom']);
+
+      if (reactVersion) {
+        this.reactVersion = reactVersion;
+      }
+      if (reactDomVersion) {
+        this.reactDomVersion = reactDomVersion;
+      } else if (reactVersion) {
+        this.reactDomVersion = reactVersion;
+      }
+    } catch {
+      // Keep defaults when package metadata is unavailable.
+    }
+  }
+
+  private toRequestPath(filePath: string): string {
+    if (this.root === '/') {
+      return filePath.startsWith('/') ? filePath : `/${filePath}`;
+    }
+
+    const rel = path.posix.relative(this.root, filePath).replace(/\\/g, '/');
+    if (!rel || rel === '.') {
+      return '/';
+    }
+
+    if (rel.startsWith('..') || path.posix.isAbsolute(rel)) {
+      const absolute = filePath.startsWith('/') ? filePath : `/${filePath}`;
+      return `/@fs${absolute}`;
+    }
+
+    return rel.startsWith('/') ? rel : `/${rel}`;
+  }
+
+  private findNearestTsconfigPath(): string | null {
+    let current = this.root || '/';
+    while (true) {
+      const candidate = path.posix.join(current, 'tsconfig.json');
+      if (this.exists(candidate)) {
+        return candidate;
+      }
+
+      if (current === '/' || current === '') {
+        break;
+      }
+      current = path.posix.dirname(current);
+    }
+    return null;
+  }
+
+  private normalizeFsPath(filePath: string): string {
+    const normalized = filePath.replace(/\\/g, '/').replace(/\/+/g, '/');
+    return normalized.startsWith('/') ? normalized : `/${normalized}`;
+  }
+
+  private loadPathAliases(): void {
+    try {
+      const tsconfigPath = this.findNearestTsconfigPath();
+      if (!tsconfigPath) {
+        return;
+      }
+
+      const content = this.vfs.readFileSync(tsconfigPath, 'utf-8');
+      const tsconfig = JSON.parse(content);
+      const compilerOptions = tsconfig?.compilerOptions;
+      const paths = compilerOptions?.paths;
+
+      if (!paths || typeof paths !== 'object') {
+        return;
+      }
+
+      const tsconfigDir = path.posix.dirname(tsconfigPath);
+      const baseUrl = typeof compilerOptions.baseUrl === 'string' ? compilerOptions.baseUrl : '.';
+      const absoluteBaseUrl = baseUrl.startsWith('/')
+        ? baseUrl
+        : path.posix.join(tsconfigDir, baseUrl);
+
+      for (const [alias, targets] of Object.entries(paths)) {
+        if (!Array.isArray(targets) || targets.length === 0) {
+          continue;
+        }
+        const firstTarget = targets[0];
+        if (typeof firstTarget !== 'string') {
+          continue;
+        }
+
+        const aliasPrefix = alias.replace(/\*$/, '');
+        if (!aliasPrefix) {
+          continue;
+        }
+
+        const targetPrefix = firstTarget.replace(/\*$/, '');
+        const absoluteTarget = targetPrefix.startsWith('/')
+          ? targetPrefix
+          : path.posix.join(absoluteBaseUrl, targetPrefix);
+
+        this.pathAliases.set(aliasPrefix, this.normalizeFsPath(absoluteTarget));
+      }
+    } catch {
+      // Ignore tsconfig parsing failures.
+    }
+  }
+
+  private resolveAliasToImportPath(targetFsPath: string, currentFile: string): string {
+    const normalizedTarget = this.normalizeFsPath(targetFsPath);
+    const virtualBase = `/__virtual__/${this.port}`;
+    const relativeToRoot = path.posix.relative(this.root, normalizedTarget).replace(/\\/g, '/');
+    if (!relativeToRoot.startsWith('..') && !path.posix.isAbsolute(relativeToRoot)) {
+      const normalized = relativeToRoot === '.' ? '' : relativeToRoot;
+      return normalized ? `${virtualBase}/${normalized}` : `${virtualBase}/`;
+    }
+    return `${virtualBase}/@fs${normalizedTarget}`;
+  }
+
+  private resolvePathAliases(code: string, currentFile: string): string {
+    if (this.pathAliases.size === 0) {
+      return code;
+    }
+
+    let result = code;
+    for (const [alias, target] of this.pathAliases) {
+      const aliasEscaped = alias.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const pattern = new RegExp(
+        `(from\\s*['"]|import\\s*\\(\\s*['"])${aliasEscaped}([^'"]+)(['"])`,
+        'g'
+      );
+
+      result = result.replace(pattern, (_match, prefix, suffix, quote) => {
+        const resolvedFsPath = path.posix.join(target, suffix);
+        const resolvedImportPath = this.resolveAliasToImportPath(resolvedFsPath, currentFile);
+        return `${prefix}${resolvedImportPath}${quote}`;
+      });
+    }
+
+    return result;
+  }
+
+  private resolveSpecialBareImports(code: string, currentFile: string): string {
+    const pattern = /(from\s*['"]|import\s*\(\s*['"])([^'"]+)(['"])/g;
+    return code.replace(pattern, (match, prefix, specifier, suffix) => {
+      if (!this.isBareSpecifier(specifier)) {
+        return match;
+      }
+
+      const resolved = this.resolveBareFileImport(specifier, currentFile);
+      if (!resolved) {
+        return match;
+      }
+
+      return `${prefix}${resolved}${suffix}`;
+    });
+  }
+
+  private isBareSpecifier(specifier: string): boolean {
+    return !specifier.startsWith('.') &&
+      !specifier.startsWith('/') &&
+      !specifier.startsWith('http://') &&
+      !specifier.startsWith('https://') &&
+      !specifier.startsWith('data:') &&
+      !specifier.startsWith('/__virtual__') &&
+      !specifier.startsWith('node:');
+  }
+
+  private resolveBareFileImport(specifier: string, currentFile: string): string | null {
+    const currentFsPath = this.resolvePath(currentFile);
+    let dir = path.posix.dirname(currentFsPath);
+
+    while (true) {
+      const candidate = path.posix.join(dir, specifier);
+      const resolved = this.resolveFileWithExtension(candidate) ?? (this.isFile(candidate) ? candidate : null);
+      if (resolved) {
+        return this.resolveAliasToImportPath(resolved, currentFile);
+      }
+
+      if (dir === '/' || dir === '') {
+        break;
+      }
+      dir = path.posix.dirname(dir);
+    }
+
+    return null;
+  }
+
+  private isFile(filePath: string): boolean {
+    try {
+      return this.vfs.statSync(filePath).isFile();
+    } catch {
+      return false;
+    }
+  }
+
+  private injectImportMetaEnv(code: string): string {
+    const envMap: Record<string, string> = {
+      MODE: JSON.stringify('development'),
+      DEV: 'true',
+      PROD: 'false',
+      SSR: 'false',
+      PORT: JSON.stringify(String(this.port)),
+      BASE_URL: JSON.stringify(`/__virtual__/${this.port}/`),
+    };
+
+    let result = code;
+    for (const [key, value] of Object.entries(envMap)) {
+      const pattern = new RegExp(`\\bimport\\.meta\\.env\\.${key}\\b`, 'g');
+      result = result.replace(pattern, value);
+    }
+
+    const envObjectLiteral = `{ MODE: "development", DEV: true, PROD: false, SSR: false, PORT: ${JSON.stringify(String(this.port))}, BASE_URL: ${JSON.stringify(`/__virtual__/${this.port}/`)} }`;
+    result = result.replace(/\bimport\.meta\.env\b/g, envObjectLiteral);
+    return result;
+  }
+
+  private isModuleRequest(headers: Record<string, string>): boolean {
+    const secFetchDest =
+      headers['sec-fetch-dest'] ||
+      headers['Sec-Fetch-Dest'] ||
+      headers['SEC-FETCH-DEST'] ||
+      '';
+    return secFetchDest === 'script' || secFetchDest === 'empty' || (isBrowser && secFetchDest === '');
+  }
+
+  private isAssetPath(pathname: string): boolean {
+    return /\.(svg|png|jpe?g|gif|webp|ico)$/.test(pathname);
+  }
+
+  private serveAbsoluteFile(filePath: string): ResponseData {
+    try {
+      const content = this.vfs.readFileSync(filePath);
+      const buffer = typeof content === 'string'
+        ? Buffer.from(content)
+        : Buffer.from(content);
+      return {
+        statusCode: 200,
+        statusMessage: 'OK',
+        headers: {
+          'Content-Type': this.getMimeType(filePath),
+          'Content-Length': String(buffer.length),
+          'Cache-Control': 'no-cache',
+        },
+        body: buffer,
+      };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+        return this.notFound(filePath);
+      }
+      return this.serverError(error);
+    }
+  }
+
+  private serveJsonAsModule(filePath: string): ResponseData {
+    try {
+      const raw = this.vfs.readFileSync(filePath, 'utf8');
+      const parsed = JSON.parse(raw) as Record<string, unknown>;
+      const exports = Object.keys(parsed)
+        .filter((key) => /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(key))
+        .map((key) => `export const ${key} = data[${JSON.stringify(key)}];`)
+        .join('\n');
+
+      const js = `const data = ${JSON.stringify(parsed)};\nexport default data;\n${exports}\n`;
+      const buffer = Buffer.from(js);
+      return {
+        statusCode: 200,
+        statusMessage: 'OK',
+        headers: {
+          'Content-Type': 'application/javascript; charset=utf-8',
+          'Content-Length': String(buffer.length),
+          'Cache-Control': 'no-cache',
+        },
+        body: buffer,
+      };
+    } catch (error) {
+      return this.serverError(error);
+    }
+  }
+
+  private serveAssetAsModule(pathname: string): ResponseData {
+    const virtualUrl = `/__virtual__/${this.port}${pathname.startsWith('/') ? pathname : `/${pathname}`}`;
+    const escapedUrl = JSON.stringify(virtualUrl);
+
+    const code = pathname.endsWith('.svg')
+      ? `
+import { jsx as _jsx } from "https://esm.sh/react@18.2.0&dev/jsx-runtime";
+const __url = ${escapedUrl};
+function __SvgComponent(props = {}) {
+  return _jsx("img", { ...props, src: __url });
+}
+__SvgComponent.toString = () => __url;
+__SvgComponent.url = __url;
+export const src = __url;
+export const url = __url;
+export const ReactComponent = __SvgComponent;
+export default __SvgComponent;
+`
+      : `
+const __url = ${escapedUrl};
+export const src = __url;
+export const url = __url;
+export default __url;
+`;
+
+    const buffer = Buffer.from(code);
+    return {
+      statusCode: 200,
+      statusMessage: 'OK',
+      headers: {
+        'Content-Type': 'application/javascript; charset=utf-8',
+        'Content-Length': String(buffer.length),
+        'Cache-Control': 'no-cache',
+      },
+      body: buffer,
+    };
   }
 
   /**
@@ -624,8 +1486,88 @@ export default css;
    */
   private serveHtmlWithHMR(filePath: string): ResponseData {
     try {
-      let content = this.vfs.readFileSync(filePath, 'utf8');
+      const content = this.vfs.readFileSync(filePath, 'utf8');
+      return this.serveHtmlContent(content);
+    } catch (error) {
+      return this.serverError(error);
+    }
+  }
 
+  private serveSyntheticIndexWithHMR(entryPath: string): ResponseData {
+    const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>almostbun App</title>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="module" src="${entryPath}"></script>
+</body>
+</html>`;
+
+    return this.serveHtmlContent(html);
+  }
+
+  private serveTanstackStartClientEntryModule(): ResponseData {
+    if (!this.syntheticTanstackRouterEntry) {
+      return this.notFound('/@almostbun/tanstack-start-client-entry.js');
+    }
+
+    const routerImportPath = this.syntheticTanstackRouterEntry.startsWith('/__virtual__/')
+      ? this.syntheticTanstackRouterEntry
+      : `/__virtual__/${this.port}${this.syntheticTanstackRouterEntry}`;
+
+    const code = `globalThis.__almostbunTanstackSyntheticStatus = 'booting';
+(async () => {
+  try {
+    const ReactMod = await import(${JSON.stringify(`https://esm.sh/react@${this.reactVersion}?dev`)});
+    const React = ReactMod.default || ReactMod;
+    const reactDom = await import(${JSON.stringify(`https://esm.sh/react-dom@${this.reactDomVersion}/client?dev`)});
+    const routerLib = await import('https://esm.sh/@tanstack/react-router?external=react');
+    const routerModule = await import(${JSON.stringify(routerImportPath)});
+
+    const createRoot = reactDom.createRoot;
+    const RouterProvider = routerLib.RouterProvider;
+    const createRouter =
+      routerModule.createRouter ||
+      routerModule.getRouter ||
+      routerModule.default;
+    if (typeof createRouter !== 'function') {
+      throw new Error('TanStack router module must export createRouter/getRouter');
+    }
+    const router = createRouter();
+    const rootElement = document.getElementById('root') || document.body;
+    createRoot(rootElement).render(React.createElement(RouterProvider, { router }));
+    globalThis.__almostbunTanstackSyntheticStatus = 'ok';
+  } catch (error) {
+    const rootElement = document.getElementById('root') || document.body;
+    rootElement.textContent = String(error);
+    globalThis.__almostbunTanstackSyntheticStatus = 'error';
+    globalThis.__almostbunTanstackSyntheticError = String(error);
+    console.error('[almostbun] TanStack synthetic entry failed', error);
+  }
+})();`;
+
+    const buffer = Buffer.from(code);
+    return {
+      statusCode: 200,
+      statusMessage: 'OK',
+      headers: {
+        'Content-Type': 'application/javascript; charset=utf-8',
+        'Content-Length': String(buffer.length),
+        'Cache-Control': 'no-cache',
+      },
+      body: buffer,
+    };
+  }
+
+  private serveHtmlContent(html: string): ResponseData {
+    let content = this.injectImportMap(html);
+    content = this.rewriteAbsoluteHtmlUrls(content);
+
+    if (!this.options.disableHmrInjection) {
       // Inject React Refresh preamble right after <head> to ensure it runs first
       // The preamble blocks (via top-level await) until React Refresh is initialized
       if (content.includes('<head>')) {
@@ -647,21 +1589,171 @@ export default css;
         // Append at the end if no closing tag found
         content += HMR_CLIENT_SCRIPT;
       }
-
-      const buffer = Buffer.from(content);
-      return {
-        statusCode: 200,
-        statusMessage: 'OK',
-        headers: {
-          'Content-Type': 'text/html; charset=utf-8',
-          'Content-Length': String(buffer.length),
-          'Cache-Control': 'no-cache',
-        },
-        body: buffer,
-      };
-    } catch (error) {
-      return this.serverError(error);
     }
+
+    const buffer = Buffer.from(content);
+    return {
+      statusCode: 200,
+      statusMessage: 'OK',
+      headers: {
+        'Content-Type': 'text/html; charset=utf-8',
+        'Content-Length': String(buffer.length),
+        'Cache-Control': 'no-cache',
+      },
+      body: buffer,
+    };
+  }
+
+  private detectSyntheticIndexEntry(): string | null {
+    this.syntheticTanstackRouterEntry = null;
+
+    const rootIndex = path.posix.join(this.root, 'index.html');
+    if (this.exists(rootIndex)) {
+      return null;
+    }
+
+    const candidates = [
+      'src/client.tsx',
+      'src/client.ts',
+      'src/client.jsx',
+      'src/client.js',
+      'src/main.tsx',
+      'src/main.ts',
+      'src/main.jsx',
+      'src/main.js',
+      'client.tsx',
+      'client.ts',
+      'client.jsx',
+      'client.js',
+      'main.tsx',
+      'main.ts',
+      'main.jsx',
+      'main.js',
+    ];
+
+    for (const candidate of candidates) {
+      const absoluteCandidate = path.posix.join(this.root, candidate);
+      if (!this.exists(absoluteCandidate) || this.isDirectory(absoluteCandidate)) {
+        continue;
+      }
+      return this.toRequestPath(absoluteCandidate);
+    }
+
+    const packageJsonPath = path.posix.join(this.root, 'package.json');
+    const hasTanStackStartDependency = (() => {
+      if (!this.exists(packageJsonPath)) {
+        return false;
+      }
+      try {
+        const pkg = JSON.parse(this.vfs.readFileSync(packageJsonPath, 'utf8')) as {
+          dependencies?: Record<string, string>;
+          devDependencies?: Record<string, string>;
+        };
+        return Boolean(
+          pkg.dependencies?.['@tanstack/react-start'] ||
+          pkg.dependencies?.['@tanstack/start'] ||
+          pkg.devDependencies?.['@tanstack/react-start'] ||
+          pkg.devDependencies?.['@tanstack/start']
+        );
+      } catch {
+        return false;
+      }
+    })();
+
+    if (hasTanStackStartDependency) {
+      const tanstackRouterCandidates = [
+        'src/router.tsx',
+        'src/router.ts',
+        'src/router.jsx',
+        'src/router.js',
+      ];
+
+      for (const candidate of tanstackRouterCandidates) {
+        const absoluteCandidate = path.posix.join(this.root, candidate);
+        if (!this.exists(absoluteCandidate) || this.isDirectory(absoluteCandidate)) {
+          continue;
+        }
+        this.syntheticTanstackRouterEntry = this.toRequestPath(absoluteCandidate);
+        return '/@almostbun/tanstack-start-client-entry.js';
+      }
+    }
+
+    return null;
+  }
+
+  private getSyntheticIndexEntryForPath(pathname: string): string | null {
+    if (!this.syntheticIndexEntry) {
+      return null;
+    }
+
+    return pathname === '/index.html' ? this.syntheticIndexEntry : null;
+  }
+
+  private rewriteAbsoluteHtmlUrls(html: string): string {
+    const virtualBase = `/__virtual__/${this.port}`;
+    const rewriteUrl = (value: string): string => {
+      if (!value.startsWith('/')) {
+        return value;
+      }
+      if (value.startsWith('//')) {
+        return value;
+      }
+      if (value.startsWith('/__virtual__/')) {
+        return value;
+      }
+      // Keep Vite's own client endpoint untouched when HMR is enabled.
+      if (value.startsWith('/@vite/')) {
+        return value;
+      }
+      return `${virtualBase}${value}`;
+    };
+
+    return html.replace(
+      /\b(src|href|action|poster|formaction)=(['"])([^'"]+)\2/gi,
+      (full, attr, quote, value) => `${attr}=${quote}${rewriteUrl(value)}${quote}`
+    );
+  }
+
+  private injectImportMap(html: string): string {
+    if (html.includes('data-almostbun-importmap')) {
+      return html;
+    }
+
+    const map = {
+      imports: {
+        react: `https://esm.sh/react@${this.reactVersion}?dev`,
+        'react/jsx-runtime': `https://esm.sh/react@${this.reactVersion}&dev/jsx-runtime`,
+        'react/jsx-dev-runtime': `https://esm.sh/react@${this.reactVersion}&dev/jsx-dev-runtime`,
+        'react-dom': `https://esm.sh/react-dom@${this.reactDomVersion}?dev`,
+        'react-dom/client': `https://esm.sh/react-dom@${this.reactDomVersion}/client?dev`,
+        vue: 'https://esm.sh/vue@3.5.28?dev',
+        'vue/server-renderer': 'https://esm.sh/vue@3.5.28/server-renderer?dev',
+        preact: 'https://esm.sh/preact@10.27.2?dev',
+        'preact/hooks': 'https://esm.sh/preact@10.27.2/hooks?dev',
+        'preact/jsx-runtime': 'https://esm.sh/preact@10.27.2/jsx-runtime?dev',
+        'preact/jsx-dev-runtime': 'https://esm.sh/preact@10.27.2/jsx-dev-runtime?dev',
+        'solid-js': 'https://esm.sh/solid-js@1.9.9?dev',
+        'solid-js/web': 'https://esm.sh/solid-js@1.9.9/web?dev',
+        'solid-js/store': 'https://esm.sh/solid-js@1.9.9/store?dev',
+        'solid-js/h': 'https://esm.sh/solid-js@1.9.9/h?dev',
+        svelte: 'https://esm.sh/svelte@5.39.6',
+        'svelte/internal': 'https://esm.sh/svelte@5.39.6/internal',
+        'svelte/internal/client': 'https://esm.sh/svelte@5.39.6/internal/client',
+        'svelte/store': 'https://esm.sh/svelte@5.39.6/store',
+        'svelte/easing': 'https://esm.sh/svelte@5.39.6/easing',
+        'svelte/motion': 'https://esm.sh/svelte@5.39.6/motion',
+        'svelte/transition': 'https://esm.sh/svelte@5.39.6/transition',
+      },
+    };
+
+    const script = `<script type="importmap" data-almostbun-importmap>${JSON.stringify(map)}</script>`;
+    if (html.includes('<head>')) {
+      return html.replace('<head>', `<head>${script}`);
+    }
+    if (html.includes('<html')) {
+      return html.replace(/<html[^>]*>/, `$&${script}`);
+    }
+    return `${script}${html}`;
   }
 }
 

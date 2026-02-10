@@ -38,6 +38,63 @@ export function format(fmt: string, ...args: unknown[]): string {
   });
 }
 
+type InspectOptions = {
+  depth?: number;
+  colors?: boolean;
+};
+
+export function formatWithOptions(
+  inspectOptions: InspectOptions | null | undefined,
+  first: unknown,
+  ...args: unknown[]
+): string {
+  if (typeof first !== 'string') {
+    const formatted = [inspect(first, inspectOptions ?? undefined)];
+    for (const arg of args) {
+      formatted.push(inspect(arg, inspectOptions ?? undefined));
+    }
+    return formatted.join(' ');
+  }
+
+  let argIndex = 0;
+  const out = first.replace(/%[sdjifoO%]/g, (match) => {
+    if (match === '%%') return '%';
+    if (argIndex >= args.length) return match;
+    const arg = args[argIndex++];
+
+    switch (match) {
+      case '%s':
+        return String(arg);
+      case '%d':
+      case '%i':
+        return String(parseInt(String(arg), 10));
+      case '%f':
+        return String(parseFloat(String(arg)));
+      case '%j':
+        try {
+          return JSON.stringify(arg);
+        } catch {
+          return '[Circular]';
+        }
+      case '%o':
+      case '%O':
+        return inspect(arg, inspectOptions ?? undefined);
+      default:
+        return match;
+    }
+  });
+
+  if (argIndex < args.length) {
+    const extra = args
+      .slice(argIndex)
+      .map((arg) => inspect(arg, inspectOptions ?? undefined))
+      .join(' ');
+    return extra ? `${out} ${extra}` : out;
+  }
+
+  return out;
+}
+
 export function inspect(obj: unknown, options?: { depth?: number; colors?: boolean }): string {
   const seen = new WeakSet();
   const depth = options?.depth ?? 2;
@@ -242,6 +299,11 @@ export function isBuffer(value: unknown): boolean {
   return value instanceof Uint8Array;
 }
 
+export function isAnyArrayBuffer(value: unknown): boolean {
+  return value instanceof ArrayBuffer
+    || (typeof SharedArrayBuffer !== 'undefined' && value instanceof SharedArrayBuffer);
+}
+
 /**
  * Returns a function that logs debug messages when NODE_DEBUG includes the section
  */
@@ -277,6 +339,7 @@ export const types = {
   isFunction,
   isPrimitive,
   isBuffer,
+  isAnyArrayBuffer,
 };
 
 // Re-export TextEncoder and TextDecoder from global
@@ -285,6 +348,7 @@ export const TextDecoder = globalThis.TextDecoder;
 
 export default {
   format,
+  formatWithOptions,
   inspect,
   inherits,
   deprecate,
@@ -306,6 +370,7 @@ export default {
   isFunction,
   isPrimitive,
   isBuffer,
+  isAnyArrayBuffer,
   types,
   TextEncoder,
   TextDecoder,

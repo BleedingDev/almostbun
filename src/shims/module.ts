@@ -47,8 +47,14 @@ export const builtinModules = [
   'util',
   'v8',
   'vm',
+  'wasi',
   'worker_threads',
   'zlib',
+  'bun',
+  'bun:sqlite',
+  'bun:test',
+  'bun:ffi',
+  'bun:jsc',
 ];
 
 export function isBuiltin(moduleName: string): boolean {

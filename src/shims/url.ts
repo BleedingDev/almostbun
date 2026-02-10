@@ -133,6 +133,39 @@ export function resolve(from: string, to: string): string {
   }
 }
 
+// Bun extends URLSearchParams with toJSON().
+if (
+  typeof globalThis.URLSearchParams !== 'undefined' &&
+  typeof (globalThis.URLSearchParams.prototype as { toJSON?: unknown }).toJSON !== 'function'
+) {
+  Object.defineProperty(globalThis.URLSearchParams.prototype, 'toJSON', {
+    configurable: true,
+    enumerable: false,
+    writable: true,
+    value: function toJSON(this: URLSearchParams): Record<string, string | string[]> {
+      const out: Record<string, string | string[]> = {};
+
+      this.forEach((value, key) => {
+        const current = out[key];
+        if (typeof current === 'undefined') {
+          out[key] = value;
+          return;
+        }
+
+        if (Array.isArray(current)) {
+          current.push(value);
+          out[key] = current;
+          return;
+        }
+
+        out[key] = [current, value];
+      });
+
+      return out;
+    },
+  });
+}
+
 // Re-export URL and URLSearchParams from globals
 export const URL = globalThis.URL;
 export const URLSearchParams = globalThis.URLSearchParams;

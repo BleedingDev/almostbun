@@ -3,25 +3,24 @@ import { describe, it, expect } from 'vitest';
 /**
  * Tests for the ESM to CJS transformation
  *
- * Note: The actual esbuild transformation runs in browser only.
- * These tests verify the transform module's interface and behavior.
+ * Note: In tests (Node), transformFile uses native esbuild fallback.
  */
 describe('Transform module', () => {
   describe('isTransformerReady', () => {
     it('should return true in non-browser environment (tests skip esbuild)', async () => {
       const { isTransformerReady } = await import('../src/transform');
-      // In Node.js test environment, we skip esbuild entirely
+      // In Node.js test environment, we don't need browser esbuild-wasm initialization.
       expect(isTransformerReady()).toBe(true);
     });
   });
 
   describe('transformFile', () => {
-    it('should return code unchanged in non-browser environment', async () => {
+    it('should transform ESM code in non-browser environment via esbuild fallback', async () => {
       const { transformFile } = await import('../src/transform');
       const code = 'export const foo = 42;';
       const result = await transformFile(code, 'test.js');
-      // In Node.js test environment, code is returned as-is
-      expect(result).toBe(code);
+      expect(result).toContain('module.exports');
+      expect(result).toContain('foo');
     });
   });
 

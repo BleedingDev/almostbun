@@ -938,6 +938,32 @@ describe('NextDevServer environment variables', () => {
       expect(response.body.toString()).toContain('About Page');
     });
 
+    it('should resolve /_next/app/app/page.js when appDir is nested under custom root', async () => {
+      const nestedVfs = new VirtualFS();
+      nestedVfs.mkdirSync('/project/app', { recursive: true });
+      nestedVfs.writeFileSync(
+        '/project/app/page.tsx',
+        'export default function Page() { return <div>Nested Root Page</div>; }'
+      );
+      nestedVfs.writeFileSync(
+        '/project/app/layout.tsx',
+        'export default function Layout({ children }) { return <html><body>{children}</body></html>; }'
+      );
+
+      const nestedServer = new NextDevServer(nestedVfs, {
+        port: 3001,
+        root: '/project',
+        appDir: '/project/app',
+        preferAppRouter: true,
+      });
+
+      const response = await nestedServer.handleRequest('GET', '/_next/app/app/page.js', {});
+
+      expect(response.statusCode).toBe(200);
+      expect(response.headers['Content-Type']).toBe('application/javascript; charset=utf-8');
+      expect(response.body.toString()).toContain('Nested Root Page');
+    });
+
     it('should serve app layout components via /_next/app/', async () => {
       server = new NextDevServer(vfs, {
         port: 3001,

@@ -26,6 +26,47 @@ interface ResolveContext {
   options: ResolveOptions;
 }
 
+function parseNpmAliasSpec(versionRange: string): {
+  targetName: string;
+  targetRange: string;
+} | null {
+  const trimmed = versionRange.trim();
+  if (!trimmed.startsWith('npm:')) {
+    return null;
+  }
+
+  const target = trimmed.slice('npm:'.length).trim();
+  if (!target) {
+    return null;
+  }
+
+  // Scoped package aliases: npm:@scope/pkg@1.2.3
+  if (target.startsWith('@')) {
+    const slashIndex = target.indexOf('/');
+    if (slashIndex === -1) {
+      return null;
+    }
+    const versionIndex = target.indexOf('@', slashIndex + 1);
+    if (versionIndex === -1) {
+      return { targetName: target, targetRange: 'latest' };
+    }
+    return {
+      targetName: target.slice(0, versionIndex),
+      targetRange: target.slice(versionIndex + 1) || 'latest',
+    };
+  }
+
+  // Unscoped package aliases: npm:pkg@1.2.3
+  const versionIndex = target.indexOf('@');
+  if (versionIndex === -1) {
+    return { targetName: target, targetRange: 'latest' };
+  }
+  return {
+    targetName: target.slice(0, versionIndex),
+    targetRange: target.slice(versionIndex + 1) || 'latest',
+  };
+}
+
 /**
  * Parse a semver version string into components
  */
@@ -44,6 +85,32 @@ function parseVersion(version: string): {
     patch: parseInt(match[3], 10),
     prerelease: match[4],
   };
+}
+
+function parseVersionLoose(version: string): {
+  major: number;
+  minor: number;
+  patch: number;
+  prerelease?: string;
+  parts: 1 | 2 | 3;
+} | null {
+  const match = version.match(/^(\d+)(?:\.(\d+))?(?:\.(\d+))?(?:-(.+))?$/);
+  if (!match) return null;
+
+  const parts = (match[3] ? 3 : match[2] ? 2 : 1) as 1 | 2 | 3;
+  return {
+    major: parseInt(match[1], 10),
+    minor: match[2] ? parseInt(match[2], 10) : 0,
+    patch: match[3] ? parseInt(match[3], 10) : 0,
+    prerelease: match[4],
+    parts,
+  };
+}
+
+function normalizeVersionInput(version: string): string | null {
+  const parsed = parseVersionLoose(version.trim());
+  if (!parsed) return null;
+  return `${parsed.major}.${parsed.minor}.${parsed.patch}${parsed.prerelease ? `-${parsed.prerelease}` : ''}`;
 }
 
 /**
@@ -113,18 +180,20 @@ function satisfies(version: string, range: string): boolean {
   // Range with hyphen: 1.0.0 - 2.0.0
   if (range.includes(' - ')) {
     const [min, max] = range.split(' - ').map((s) => s.trim());
-    return compareVersions(version, min) >= 0 && compareVersions(version, max) <= 0;
+    const minNormalized = normalizeVersionInput(min) ?? min;
+    const maxNormalized = normalizeVersionInput(max) ?? max;
+    return compareVersions(version, minNormalized) >= 0 && compareVersions(version, maxNormalized) <= 0;
   }
 
   // Compound ranges with operators: >= 2.1.2 < 3.0.0
   // Parse all operators and versions from the range
-  const operatorMatches = range.match(/(>=|<=|>|<|=)?\s*(\d+\.\d+\.\d+(?:-[^\s]*)?)/g);
+  const operatorMatches = range.match(/(>=|<=|>|<|=)?\s*(\d+(?:\.\d+){0,2}(?:-[^\s]*)?)/g);
   if (operatorMatches && operatorMatches.length > 1) {
     return operatorMatches.every((match) => {
-      const m = match.match(/^(>=|<=|>|<|=)?\s*(\d+\.\d+\.\d+(?:-[^\s]*)?)$/);
+      const m = match.match(/^(>=|<=|>|<|=)?\s*(\d+(?:\.\d+){0,2}(?:-[^\s]*)?)$/);
       if (!m) return true;
       const op = m[1] || '=';
-      const ver = m[2];
+      const ver = normalizeVersionInput(m[2]) ?? m[2];
       switch (op) {
         case '>=': return compareVersions(version, ver) >= 0;
         case '<=': return compareVersions(version, ver) <= 0;
@@ -138,9 +207,11 @@ function satisfies(version: string, range: string): boolean {
 
   // Caret range: ^1.2.3 means >=1.2.3 <2.0.0 (or <1.3.0 if major is 0)
   if (range.startsWith('^')) {
-    const base = range.slice(1);
-    const baseParsed = parseVersion(base);
+    const baseRaw = range.slice(1).trim();
+    const baseParsed = parseVersionLoose(baseRaw);
     if (!baseParsed) return false;
+    const base = normalizeVersionInput(baseRaw);
+    if (!base) return false;
 
     if (parsed.major !== baseParsed.major) {
       return false;
@@ -148,10 +219,13 @@ function satisfies(version: string, range: string): boolean {
 
     if (baseParsed.major === 0) {
       // ^0.x.y is more restrictive
-      if (baseParsed.minor !== 0 && parsed.minor !== baseParsed.minor) {
+      if (baseParsed.parts >= 2 && parsed.minor !== baseParsed.minor) {
         return false;
       }
-      if (baseParsed.minor === 0 && parsed.minor !== 0) {
+      if (baseParsed.parts >= 2 && baseParsed.minor === 0 && parsed.minor !== 0) {
+        return false;
+      }
+      if (baseParsed.parts === 3 && baseParsed.minor === 0 && parsed.patch < baseParsed.patch) {
         return false;
       }
     }
@@ -161,11 +235,16 @@ function satisfies(version: string, range: string): boolean {
 
   // Tilde range: ~1.2.3 means >=1.2.3 <1.3.0
   if (range.startsWith('~')) {
-    const base = range.slice(1);
-    const baseParsed = parseVersion(base);
+    const baseRaw = range.slice(1).trim();
+    const baseParsed = parseVersionLoose(baseRaw);
     if (!baseParsed) return false;
+    const base = normalizeVersionInput(baseRaw);
+    if (!base) return false;
 
-    if (parsed.major !== baseParsed.major || parsed.minor !== baseParsed.minor) {
+    if (parsed.major !== baseParsed.major) {
+      return false;
+    }
+    if (baseParsed.parts >= 2 && parsed.minor !== baseParsed.minor) {
       return false;
     }
 
@@ -174,25 +253,29 @@ function satisfies(version: string, range: string): boolean {
 
   // Greater than or equal: >=1.2.3
   if (range.startsWith('>=')) {
-    const base = range.slice(2).trim();
+    const rawBase = range.slice(2).trim();
+    const base = normalizeVersionInput(rawBase) ?? rawBase;
     return compareVersions(version, base) >= 0;
   }
 
   // Greater than: >1.2.3
   if (range.startsWith('>')) {
-    const base = range.slice(1).trim();
+    const rawBase = range.slice(1).trim();
+    const base = normalizeVersionInput(rawBase) ?? rawBase;
     return compareVersions(version, base) > 0;
   }
 
   // Less than or equal: <=1.2.3
   if (range.startsWith('<=')) {
-    const base = range.slice(2).trim();
+    const rawBase = range.slice(2).trim();
+    const base = normalizeVersionInput(rawBase) ?? rawBase;
     return compareVersions(version, base) <= 0;
   }
 
   // Less than: <1.2.3
   if (range.startsWith('<')) {
-    const base = range.slice(1).trim();
+    const rawBase = range.slice(1).trim();
+    const base = normalizeVersionInput(rawBase) ?? rawBase;
     return compareVersions(version, base) < 0;
   }
 
@@ -218,7 +301,8 @@ function satisfies(version: string, range: string): boolean {
   }
 
   // Fallback: try exact match
-  return compareVersions(version, range) === 0;
+  const normalizedFallback = normalizeVersionInput(range);
+  return compareVersions(version, normalizedFallback ?? range) === 0;
 }
 
 /**
@@ -324,6 +408,23 @@ async function resolvePackage(
   try {
     options.onProgress?.(`Resolving ${packageName}@${versionRange}`);
 
+    const alias = parseNpmAliasSpec(versionRange);
+    if (alias) {
+      await resolvePackage(alias.targetName, alias.targetRange, context);
+      const targetResolved = resolved.get(alias.targetName);
+      if (!targetResolved) {
+        throw new Error(
+          `npm alias target "${alias.targetName}@${alias.targetRange}" for "${packageName}" was not resolved`
+        );
+      }
+
+      resolved.set(packageName, {
+        ...targetResolved,
+        name: packageName,
+      });
+      return;
+    }
+
     // Fetch package manifest
     const manifest = await registry.getPackageManifest(packageName);
 
@@ -360,6 +461,16 @@ async function resolvePackage(
 
     // Resolve dependencies in parallel
     const deps = { ...versionData.dependencies };
+
+    if (versionData.peerDependencies) {
+      for (const [peerName, peerRange] of Object.entries(versionData.peerDependencies)) {
+        const isOptionalPeer =
+          versionData.peerDependenciesMeta?.[peerName]?.optional === true;
+        if (!isOptionalPeer) {
+          deps[peerName] = peerRange;
+        }
+      }
+    }
 
     if (options.includeOptional && versionData.optionalDependencies) {
       Object.assign(deps, versionData.optionalDependencies);

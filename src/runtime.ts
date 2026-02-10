@@ -50,8 +50,20 @@ import * as inspectorShim from './shims/inspector';
 import * as asyncHooksShim from './shims/async_hooks';
 import * as domainShim from './shims/domain';
 import * as diagnosticsChannelShim from './shims/diagnostics_channel';
+import * as wasiShim from './shims/wasi';
 import * as sentryShim from './shims/sentry';
 import assertShim from './shims/assert';
+import constantsShim from './shims/constants';
+import {
+  createBunModule,
+  type BunModule,
+} from './shims/bun';
+import * as bunSqliteShim from './shims/bun-sqlite';
+import * as bunTestShim from './shims/bun-test';
+import * as bunFfiShim from './shims/bun-ffi';
+import * as bunJscShim from './shims/bun-jsc';
+import * as modernJsEffectClientShim from './shims/modernjs-effect-client';
+import * as modernJsEffectServerShim from './shims/modernjs-effect-server';
 import { resolve as resolveExports } from 'resolve.exports';
 
 /**
@@ -77,7 +89,7 @@ function transformDynamicImports(code: string): string {
 function transformEsmToCjs(code: string, filename: string): string {
   // Check if code has ESM syntax
   const hasImport = /\bimport\s+[\w{*'"]/m.test(code);
-  const hasExport = /\bexport\s+(?:default|const|let|var|function|class|{|\*)/m.test(code);
+  const hasExport = /\bexport\s+(?:default|const|let|var|async\s+function|function|class|{|\*)/m.test(code);
   const hasImportMeta = /\bimport\.meta\b/.test(code);
 
   if (!hasImport && !hasExport && !hasImportMeta) {
@@ -85,6 +97,8 @@ function transformEsmToCjs(code: string, filename: string): string {
   }
 
   let transformed = code;
+  const namedDeclarationExports = new Set<string>();
+  let reExportCounter = 0;
 
   // Transform import.meta.url to a file:// URL
   transformed = transformed.replace(/\bimport\.meta\.url\b/g, `"file://${filename}"`);
@@ -127,6 +141,28 @@ function transformEsmToCjs(code: string, filename: string): string {
     'module.exports = module.exports.default = '
   );
 
+  // Transform export * from: export * from 'x' -> Object.assign(module.exports, require('x'))
+  transformed = transformed.replace(
+    /\bexport\s+\*\s+from\s+['"]([^'"]+)['"]\s*;?/g,
+    (_, module) => `Object.assign(module.exports, require("${module}"));`
+  );
+
+  // Transform re-export lists: export { a as b } from 'x'
+  transformed = transformed.replace(
+    /\bexport\s+\{([^}]+)\}\s+from\s+['"]([^'"]+)['"]\s*;?/g,
+    (_, exports, module) => {
+      const tempVar = `__reexport_${reExportCounter++}`;
+      const lines = [`const ${tempVar} = require("${module}");`];
+      for (const item of exports.split(',')) {
+        const [local, exported] = item.trim().split(/\s+as\s+/);
+        const localName = local.trim();
+        const exportName = (exported || local).trim();
+        lines.push(`module.exports.${exportName} = ${tempVar}.${localName};`);
+      }
+      return lines.join('\n');
+    }
+  );
+
   // Transform named exports: export { a, b } -> module.exports.a = a; module.exports.b = b
   transformed = transformed.replace(
     /\bexport\s+\{([^}]+)\}\s*;?/g,
@@ -146,17 +182,38 @@ function transformEsmToCjs(code: string, filename: string): string {
     '$1 $2 = module.exports.$2 ='
   );
 
+  // Transform export async function: export async function x() {} -> async function x() {}
+  transformed = transformed.replace(
+    /\bexport\s+async\s+function\s+(\w+)/g,
+    (_, name) => {
+      namedDeclarationExports.add(name);
+      return `async function ${name}`;
+    }
+  );
+
   // Transform export function: export function x() {} -> function x() {} module.exports.x = x
   transformed = transformed.replace(
     /\bexport\s+function\s+(\w+)/g,
-    'function $1'
+    (_, name) => {
+      namedDeclarationExports.add(name);
+      return `function ${name}`;
+    }
   );
 
   // Transform export class: export class X {} -> class X {} module.exports.X = X
   transformed = transformed.replace(
     /\bexport\s+class\s+(\w+)/g,
-    'class $1'
+    (_, name) => {
+      namedDeclarationExports.add(name);
+      return `class ${name}`;
+    }
   );
+
+  if (namedDeclarationExports.size > 0) {
+    transformed += `\n${Array.from(namedDeclarationExports)
+      .map((name) => `module.exports.${name} = ${name};`)
+      .join('\n')}`;
+  }
 
   // Mark as ES module for interop
   if (hasExport) {
@@ -205,6 +262,7 @@ export interface Module {
 export interface RuntimeOptions {
   cwd?: string;
   env?: Record<string, string>;
+  argv?: string[];
   onConsole?: (method: string, args: unknown[]) => void;
 }
 
@@ -238,13 +296,24 @@ function createStringDecoderModule() {
  * Create a basic timers module
  */
 function createTimersModule() {
+  const runtimeGlobal = globalThis as typeof globalThis & {
+    setImmediate?: (callback: (...args: unknown[]) => void, ...args: unknown[]) => unknown;
+    clearImmediate?: (handle: unknown) => void;
+  };
+  const globalSetImmediate = runtimeGlobal.setImmediate;
+  const globalClearImmediate = runtimeGlobal.clearImmediate;
+
   return {
     setTimeout: globalThis.setTimeout.bind(globalThis),
     setInterval: globalThis.setInterval.bind(globalThis),
-    setImmediate: (fn: () => void) => setTimeout(fn, 0),
+    setImmediate: typeof globalSetImmediate === 'function'
+      ? globalSetImmediate.bind(globalThis)
+      : (fn: (...args: unknown[]) => void, ...args: unknown[]) => setTimeout(() => fn(...args), 0),
     clearTimeout: globalThis.clearTimeout.bind(globalThis),
     clearInterval: globalThis.clearInterval.bind(globalThis),
-    clearImmediate: globalThis.clearTimeout.bind(globalThis),
+    clearImmediate: typeof globalClearImmediate === 'function'
+      ? globalClearImmediate.bind(globalThis)
+      : globalThis.clearTimeout.bind(globalThis),
   };
 }
 
@@ -303,6 +372,7 @@ const builtinModules: Record<string, unknown> = {
   dns: dnsShim,
   child_process: childProcessShim,
   assert: assertShim,
+  constants: constantsShim,
   string_decoder: createStringDecoderModule(),
   timers: createTimersModule(),
   _http_common: {},
@@ -330,6 +400,7 @@ const builtinModules: Record<string, unknown> = {
   async_hooks: asyncHooksShim,
   domain: domainShim,
   diagnostics_channel: diagnosticsChannelShim,
+  wasi: wasiShim,
   // prettier uses createRequire which doesn't work in our runtime, so we shim it
   prettier: prettierShim,
   // Some packages explicitly require 'console'
@@ -339,6 +410,14 @@ const builtinModules: Record<string, unknown> = {
   // Sentry SDK (no-op since error tracking isn't useful in browser runtime)
   '@sentry/node': sentryShim,
   '@sentry/core': sentryShim,
+  // Bun built-ins
+  'bun:sqlite': bunSqliteShim,
+  'bun:test': bunTestShim,
+  'bun:ffi': bunFfiShim,
+  'bun:jsc': bunJscShim,
+  // Modern.js Effect BFF
+  '@modern-js/plugin-bff/effect-client': modernJsEffectClientShim,
+  '@modern-js/plugin-bff/effect-server': modernJsEffectServerShim,
 };
 
 /**
@@ -351,13 +430,21 @@ function createRequire(
   currentDir: string,
   moduleCache: Record<string, Module>,
   options: RuntimeOptions,
-  processedCodeCache?: Map<string, string>
+  processedCodeCache?: Map<string, string>,
+  bunModule?: BunModule
 ): RequireFunction {
+  const bun = bunModule ?? createBunModule(fsShim, process);
+
   // Module resolution cache for faster repeated imports
   const resolutionCache: Map<string, string | null> = new Map();
 
   // Package.json parsing cache
   const packageJsonCache: Map<string, PackageJson | null> = new Map();
+  const nearestTsConfigCache: Map<string, string | null> = new Map();
+  const tsConfigAliasCache: Map<string, {
+    baseUrl: string;
+    paths: Array<{ pattern: string; targets: string[] }>;
+  } | null> = new Map();
 
   const getParsedPackageJson = (pkgPath: string): PackageJson | null => {
     if (packageJsonCache.has(pkgPath)) {
@@ -374,14 +461,214 @@ function createRequire(
     }
   };
 
+  const moduleExtensions = ['.js', '.json', '.node', '.mjs', '.cjs', '.ts', '.tsx', '.mts', '.cts', '.jsx'];
+
+  const tryResolveFile = (basePath: string): string | null => {
+    // Try exact path first
+    if (vfs.existsSync(basePath)) {
+      const stats = vfs.statSync(basePath);
+      if (stats.isFile()) {
+        return basePath;
+      }
+      // Directory - look for index files
+      for (const ext of moduleExtensions) {
+        const indexPath = pathShim.join(basePath, `index${ext}`);
+        if (vfs.existsSync(indexPath)) {
+          return indexPath;
+        }
+      }
+    }
+
+    // Try with extensions
+    for (const ext of moduleExtensions) {
+      const withExt = basePath + ext;
+      if (vfs.existsSync(withExt)) {
+        return withExt;
+      }
+    }
+
+    return null;
+  };
+
+  const getNearestTsConfigDir = (startDir: string): string | null => {
+    if (nearestTsConfigCache.has(startDir)) {
+      return nearestTsConfigCache.get(startDir)!;
+    }
+
+    const visited: string[] = [];
+    let current = startDir;
+
+    while (true) {
+      if (nearestTsConfigCache.has(current)) {
+        const cached = nearestTsConfigCache.get(current)!;
+        for (const dir of visited) {
+          nearestTsConfigCache.set(dir, cached);
+        }
+        return cached;
+      }
+
+      visited.push(current);
+      const tsconfigPath = pathShim.join(current, 'tsconfig.json');
+      const jsconfigPath = pathShim.join(current, 'jsconfig.json');
+      if (vfs.existsSync(tsconfigPath) || vfs.existsSync(jsconfigPath)) {
+        for (const dir of visited) {
+          nearestTsConfigCache.set(dir, current);
+        }
+        return current;
+      }
+
+      if (current === '/') {
+        for (const dir of visited) {
+          nearestTsConfigCache.set(dir, null);
+        }
+        return null;
+      }
+
+      current = pathShim.dirname(current);
+    }
+  };
+
+  const getTsConfigAliases = (tsconfigDir: string): {
+    baseUrl: string;
+    paths: Array<{ pattern: string; targets: string[] }>;
+  } | null => {
+    if (tsConfigAliasCache.has(tsconfigDir)) {
+      return tsConfigAliasCache.get(tsconfigDir)!;
+    }
+
+    const tsconfigPath = pathShim.join(tsconfigDir, 'tsconfig.json');
+    const jsconfigPath = pathShim.join(tsconfigDir, 'jsconfig.json');
+    const configPath = vfs.existsSync(tsconfigPath) ? tsconfigPath : jsconfigPath;
+    if (!vfs.existsSync(configPath)) {
+      tsConfigAliasCache.set(tsconfigDir, null);
+      return null;
+    }
+
+    try {
+      const raw = vfs.readFileSync(configPath, 'utf8');
+      const parsed = JSON.parse(raw) as {
+        compilerOptions?: {
+          baseUrl?: unknown;
+          paths?: unknown;
+        };
+      };
+      const compilerOptions = parsed.compilerOptions || {};
+      const rawBaseUrl = typeof compilerOptions.baseUrl === 'string'
+        ? compilerOptions.baseUrl
+        : '.';
+      const baseUrl = rawBaseUrl.startsWith('/')
+        ? rawBaseUrl
+        : pathShim.resolve(tsconfigDir, rawBaseUrl);
+
+      const pathEntries: Array<{ pattern: string; targets: string[] }> = [];
+      const rawPaths = compilerOptions.paths;
+      if (rawPaths && typeof rawPaths === 'object') {
+        for (const [pattern, targets] of Object.entries(rawPaths as Record<string, unknown>)) {
+          if (typeof pattern !== 'string') continue;
+          if (Array.isArray(targets)) {
+            const stringTargets = targets.filter((entry): entry is string => typeof entry === 'string');
+            if (stringTargets.length > 0) {
+              pathEntries.push({ pattern, targets: stringTargets });
+            }
+            continue;
+          }
+          if (typeof targets === 'string') {
+            pathEntries.push({ pattern, targets: [targets] });
+          }
+        }
+      }
+
+      const info = {
+        baseUrl,
+        paths: pathEntries,
+      };
+      tsConfigAliasCache.set(tsconfigDir, info);
+      return info;
+    } catch {
+      tsConfigAliasCache.set(tsconfigDir, null);
+      return null;
+    }
+  };
+
+  const matchPathPattern = (pattern: string, request: string): string | null => {
+    const starIndex = pattern.indexOf('*');
+    if (starIndex < 0) {
+      return pattern === request ? '' : null;
+    }
+
+    const prefix = pattern.slice(0, starIndex);
+    const suffix = pattern.slice(starIndex + 1);
+    if (!request.startsWith(prefix)) {
+      return null;
+    }
+    if (suffix && !request.endsWith(suffix)) {
+      return null;
+    }
+
+    return request.slice(prefix.length, request.length - suffix.length);
+  };
+
+  const applyPathTarget = (target: string, wildcardMatch: string): string => {
+    const starIndex = target.indexOf('*');
+    if (starIndex < 0) {
+      return target;
+    }
+    return `${target.slice(0, starIndex)}${wildcardMatch}${target.slice(starIndex + 1)}`;
+  };
+
+  const resolveTsConfigAlias = (id: string, fromDir: string): string | null => {
+    const tsconfigDir = getNearestTsConfigDir(fromDir);
+    if (!tsconfigDir) {
+      return null;
+    }
+
+    const aliases = getTsConfigAliases(tsconfigDir);
+    if (!aliases) {
+      return null;
+    }
+
+    for (const entry of aliases.paths) {
+      const wildcardMatch = matchPathPattern(entry.pattern, id);
+      if (wildcardMatch === null) {
+        continue;
+      }
+
+      for (const target of entry.targets) {
+        const mappedTarget = applyPathTarget(target, wildcardMatch);
+        const candidateBase = mappedTarget.startsWith('/')
+          ? mappedTarget
+          : pathShim.resolve(aliases.baseUrl, mappedTarget);
+        const resolved = tryResolveFile(candidateBase);
+        if (resolved) {
+          return resolved;
+        }
+      }
+    }
+
+    // Support baseUrl-only absolute imports (e.g. "src/foo") while avoiding package names.
+    if (id.includes('/') || id === 'package.json') {
+      const baseUrlCandidate = tryResolveFile(pathShim.resolve(aliases.baseUrl, id));
+      if (baseUrlCandidate) {
+        return baseUrlCandidate;
+      }
+    }
+
+    return null;
+  };
+
   const resolveModule = (id: string, fromDir: string): string => {
     // Handle node: protocol prefix (Node.js 16+)
     if (id.startsWith('node:')) {
       id = id.slice(5);
     }
 
+    // Handle Bun protocol modules (bun:sqlite, bun:test, etc.)
+    if (id.startsWith('bun:') && builtinModules[id]) {
+      return id;
+    }
+
     // Built-in modules
-    if (builtinModules[id] || id === 'fs' || id === 'process' || id === 'url' || id === 'querystring' || id === 'util') {
+    if (builtinModules[id] || id === 'bun' || id === 'fs' || id === 'process' || id === 'url' || id === 'querystring' || id === 'util') {
       return id;
     }
 
@@ -396,82 +683,142 @@ function createRequire(
     }
 
     // Relative paths
-    if (id.startsWith('./') || id.startsWith('../') || id.startsWith('/')) {
+    if (id === '.' || id === '..' || id.startsWith('./') || id.startsWith('../') || id.startsWith('/')) {
       const resolved = id.startsWith('/')
         ? id
         : pathShim.resolve(fromDir, id);
 
-      // Try exact path
-      if (vfs.existsSync(resolved)) {
-        const stats = vfs.statSync(resolved);
-        if (stats.isFile()) {
-          resolutionCache.set(cacheKey, resolved);
-          return resolved;
-        }
-        // Directory - look for index.js
-        const indexPath = pathShim.join(resolved, 'index.js');
-        if (vfs.existsSync(indexPath)) {
-          resolutionCache.set(cacheKey, indexPath);
-          return indexPath;
-        }
-      }
-
-      // Try with extensions
-      const extensions = ['.js', '.json'];
-      for (const ext of extensions) {
-        const withExt = resolved + ext;
-        if (vfs.existsSync(withExt)) {
-          resolutionCache.set(cacheKey, withExt);
-          return withExt;
-        }
+      const resolvedFile = tryResolveFile(resolved);
+      if (resolvedFile) {
+        resolutionCache.set(cacheKey, resolvedFile);
+        return resolvedFile;
       }
 
       resolutionCache.set(cacheKey, null);
       throw new Error(`Cannot find module '${id}' from '${fromDir}'`);
     }
 
-    // Helper to try resolving a path with extensions
-    const tryResolveFile = (basePath: string): string | null => {
-      // Try exact path first
-      if (vfs.existsSync(basePath)) {
-        const stats = vfs.statSync(basePath);
-        if (stats.isFile()) {
-          return basePath;
-        }
-        // Directory - look for index.js
-        const indexPath = pathShim.join(basePath, 'index.js');
-        if (vfs.existsSync(indexPath)) {
-          return indexPath;
-        }
-      }
+    // tsconfig/jsconfig path aliases (e.g. @/* -> src/*)
+    const aliasResolved = resolveTsConfigAlias(id, fromDir);
+    if (aliasResolved) {
+      resolutionCache.set(cacheKey, aliasResolved);
+      return aliasResolved;
+    }
 
-      // Try with extensions
-      const extensions = ['.js', '.json', '.node'];
-      for (const ext of extensions) {
-        const withExt = basePath + ext;
-        if (vfs.existsSync(withExt)) {
-          return withExt;
+    // Runtime executes server-oriented Node code, so do not apply browser field remapping.
+    const applyBrowserFieldRemap = (resolvedPath: string, pkg: PackageJson, pkgRoot: string): string | null => {
+      return resolvedPath;
+    };
+
+    const normalizeResolvedExports = (value: unknown): string[] => {
+      const out: string[] = [];
+      const seen = new Set<string>();
+
+      const visit = (node: unknown) => {
+        if (!node) return;
+        if (typeof node === 'string') {
+          if (!seen.has(node)) {
+            seen.add(node);
+            out.push(node);
+          }
+          return;
+        }
+        if (Array.isArray(node)) {
+          for (const item of node) visit(item);
+          return;
+        }
+        if (typeof node === 'object') {
+          for (const value of Object.values(node as Record<string, unknown>)) {
+            visit(value);
+          }
+        }
+      };
+
+      visit(value);
+      return out;
+    };
+
+    const tryResolveFromPackageExports = (
+      pkg: PackageJson,
+      pkgRoot: string,
+      pkgName: string,
+      moduleId: string
+    ): string | null => {
+      if (!pkg.exports) return null;
+
+      const subPath = moduleId === pkgName
+        ? '.'
+        : `./${moduleId.slice(pkgName.length + 1)}`;
+
+      const requestCandidates = moduleId === pkgName
+        ? [moduleId, '.']
+        : [moduleId, subPath];
+
+      const conditionCandidates: Array<Record<string, boolean>> = [
+        { require: true },
+        {},
+      ];
+
+      for (const request of requestCandidates) {
+        for (const conditions of conditionCandidates) {
+          try {
+            const resolved = resolveExports(pkg, request, conditions);
+            const exportPaths = normalizeResolvedExports(resolved);
+
+            for (const exportPath of exportPaths) {
+              const fullExportPath = exportPath.startsWith('/')
+                ? exportPath
+                : pathShim.join(pkgRoot, exportPath);
+              const resolvedFile = tryResolveFile(fullExportPath);
+              if (!resolvedFile) continue;
+
+              const remapped = applyBrowserFieldRemap(resolvedFile, pkg, pkgRoot);
+              if (remapped) return remapped;
+            }
+          } catch {
+            // resolve.exports throws on no match; continue to fallback strategies.
+          }
         }
       }
 
       return null;
     };
 
-    // Apply browser field object remapping for a resolved file within a package
-    const applyBrowserFieldRemap = (resolvedPath: string, pkg: PackageJson, pkgRoot: string): string | null => {
-      if (!pkg.browser || typeof pkg.browser !== 'object') return resolvedPath;
-      const browserMap = pkg.browser as Record<string, string | false>;
-      // Build relative path from package root (e.g., "./lib/node.js")
-      const relPath = './' + pathShim.relative(pkgRoot, resolvedPath);
-      // Also check without extension for common patterns
-      const relPathNoExt = relPath.replace(/\.(js|json|cjs|mjs)$/, '');
-      for (const key of [relPath, relPathNoExt]) {
-        if (key in browserMap) {
-          if (browserMap[key] === false) return null; // Module excluded in browser
-          return tryResolveFile(pathShim.join(pkgRoot, browserMap[key] as string));
+    const pnpmRootsCache = new Map<string, string[]>();
+
+    const getPnpmPackageRoots = (nodeModulesDir: string, pkgName: string): string[] => {
+      const cacheKey = `${nodeModulesDir}|${pkgName}`;
+      const cached = pnpmRootsCache.get(cacheKey);
+      if (cached) return cached;
+
+      const storeDir = pathShim.join(nodeModulesDir, '.pnpm');
+      const roots: string[] = [];
+
+      if (vfs.existsSync(storeDir) && vfs.statSync(storeDir).isDirectory()) {
+        let entries: string[] = [];
+        try {
+          entries = vfs.readdirSync(storeDir);
+        } catch {
+          entries = [];
+        }
+
+        const token = pkgName.startsWith('@')
+          ? `${pkgName.slice(1).replace('/', '+')}@`
+          : `${pkgName}@`;
+
+        for (const entry of entries) {
+          if (!entry.includes(token)) continue;
+
+          const pkgRoot = pathShim.join(storeDir, entry, 'node_modules', pkgName);
+          const pkgPath = pathShim.join(pkgRoot, 'package.json');
+          if (vfs.existsSync(pkgPath)) {
+            roots.push(pkgRoot);
+          }
         }
       }
-      return resolvedPath;
+
+      pnpmRootsCache.set(cacheKey, roots);
+      return roots;
     };
 
     // Helper to resolve from a node_modules directory
@@ -482,42 +829,43 @@ function createRequire(
         ? `${parts[0]}/${parts[1]}`  // Scoped package
         : parts[0];
 
-      const pkgRoot = pathShim.join(nodeModulesDir, pkgName);
-      const pkgPath = pathShim.join(pkgRoot, 'package.json');
+      const packageRoots = [
+        pathShim.join(nodeModulesDir, pkgName),
+        ...getPnpmPackageRoots(nodeModulesDir, pkgName),
+      ];
 
-      // Check package.json first — it controls entry points (browser, main, exports)
-      const pkg = getParsedPackageJson(pkgPath);
-      if (pkg) {
-        // Use resolve.exports to handle the exports field
-        if (pkg.exports) {
-          try {
-            // resolveExports expects the full module specifier (e.g., 'convex/server')
-            // and returns the resolved path(s) relative to package root
-            const resolved = resolveExports(pkg, moduleId, { require: true });
-            if (resolved && resolved.length > 0) {
-              const exportPath = resolved[0];
-              const fullExportPath = pathShim.join(pkgRoot, exportPath);
-              const resolvedFile = tryResolveFile(fullExportPath);
-              if (resolvedFile) return resolvedFile;
+      for (const pkgRoot of packageRoots) {
+        const pkgPath = pathShim.join(pkgRoot, 'package.json');
+        const pkg = getParsedPackageJson(pkgPath);
+
+        // Check package.json first — it controls entry points (browser, main, exports)
+        if (pkg) {
+          const exportResolved = tryResolveFromPackageExports(pkg, pkgRoot, pkgName, moduleId);
+          if (exportResolved) return exportResolved;
+
+          // If this is the package root (no sub-path), use main/module entry.
+          if (pkgName === moduleId) {
+            const main = pkg.main || pkg.module || 'index.js';
+            const mainPath = pathShim.join(pkgRoot, main);
+            const resolvedMain = tryResolveFile(mainPath);
+            if (resolvedMain) {
+              const remapped = applyBrowserFieldRemap(resolvedMain, pkg, pkgRoot);
+              if (remapped) return remapped;
             }
-          } catch {
-            // resolveExports throws if no match found, fall through to main
           }
         }
 
-        // If this is the package root (no sub-path), use browser/main entry
-        if (pkgName === moduleId) {
-          // Prefer browser field (string form) since we're running in a browser
-          let main: string | undefined;
-          if (typeof pkg.browser === 'string') {
-            main = pkg.browser;
+        // Resolve sub-path directly from package root when exports are absent/incomplete.
+        if (moduleId !== pkgName && moduleId.startsWith(`${pkgName}/`)) {
+          const subPath = moduleId.slice(pkgName.length + 1);
+          const resolvedSubPath = tryResolveFile(pathShim.join(pkgRoot, subPath));
+          if (resolvedSubPath) {
+            if (pkg) {
+              const remapped = applyBrowserFieldRemap(resolvedSubPath, pkg, pkgRoot);
+              if (remapped) return remapped;
+            }
+            return resolvedSubPath;
           }
-          if (!main) {
-            main = pkg.main || 'index.js';
-          }
-          const mainPath = pathShim.join(pkgRoot, main);
-          const resolvedMain = tryResolveFile(mainPath);
-          if (resolvedMain) return resolvedMain;
         }
       }
 
@@ -588,25 +936,32 @@ function createRequire(
 
     // Read and execute JS file
     const rawCode = vfs.readFileSync(resolvedPath, 'utf8');
+    // Node-style executables often start with a shebang line (#!/usr/bin/env node).
+    // Strip it before eval so CLI bins from node_modules can execute in-browser.
+    const sanitizedRawCode = rawCode.startsWith('#!')
+      ? rawCode.replace(/^#![^\r\n]*(?:\r?\n)?/, '')
+      : rawCode;
     const dirname = pathShim.dirname(resolvedPath);
 
     // Check processed code cache (useful for HMR when module cache is cleared but code hasn't changed)
     // Use a simple hash of the content for cache key to handle content changes
-    const codeCacheKey = `${resolvedPath}|${simpleHash(rawCode)}`;
+    const codeCacheKey = `${resolvedPath}|${simpleHash(sanitizedRawCode)}`;
     let code = processedCodeCache?.get(codeCacheKey);
 
     if (!code) {
-      code = rawCode;
+      code = sanitizedRawCode;
 
       // Transform ESM to CJS if needed (for .mjs files or ESM that wasn't pre-transformed)
       // This handles files that weren't transformed during npm install
       // BUT skip .cjs files and already-bundled CJS code
       const isCjsFile = resolvedPath.endsWith('.cjs');
       const isAlreadyBundledCjs = code.startsWith('"use strict";\nvar __') ||
-                                   code.startsWith("'use strict';\nvar __");
+                                   code.startsWith("'use strict';\nvar __") ||
+                                   code.startsWith('var __create = Object.create;') ||
+                                   code.startsWith('Object.defineProperty(exports, "__esModule", { value: true });');
 
-      const hasEsmImport = /\bimport\s+[\w{*'"]/m.test(code);
-      const hasEsmExport = /\bexport\s+(?:default|const|let|var|function|class|{|\*)/m.test(code);
+      const hasEsmImport = /^\s*import\s+[\w{*'"]/m.test(code);
+      const hasEsmExport = /^\s*export\s+(?:default|const|let|var|function|class|{|\*)/m.test(code);
 
       if (!isCjsFile && !isAlreadyBundledCjs) {
         if (resolvedPath.endsWith('.mjs') || resolvedPath.includes('/esm/') || hasEsmImport || hasEsmExport) {
@@ -630,7 +985,8 @@ function createRequire(
       dirname,
       moduleCache,
       options,
-      processedCodeCache
+      processedCodeCache,
+      bun
     );
     moduleRequire.cache = moduleCache;
 
@@ -644,7 +1000,7 @@ function createRequire(
     // - import.meta is provided for ESM code that uses it
     try {
       const importMetaUrl = 'file://' + resolvedPath;
-      const wrappedCode = `(function($exports, $require, $module, $filename, $dirname, $process, $console, $importMeta, $dynamicImport) {
+      const wrappedCode = `(function($exports, $require, $module, $filename, $dirname, $process, $console, $importMeta, $dynamicImport, $bun) {
 var exports = $exports;
 var require = $require;
 var module = $module;
@@ -654,10 +1010,13 @@ var process = $process;
 var console = $console;
 var import_meta = $importMeta;
 var __dynamicImport = $dynamicImport;
+var Bun = $bun;
 // Set up global.process and globalThis.process for code that accesses them directly
 var global = globalThis;
 globalThis.process = $process;
 global.process = $process;
+globalThis.Bun = $bun;
+global.Bun = $bun;
 return (function() {
 ${code}
 }).call(this);
@@ -683,13 +1042,17 @@ ${code}
         process,
         consoleWrapper,
         { url: importMetaUrl, dirname, filename: resolvedPath },
-        dynamicImport
+        dynamicImport,
+        bun
       );
 
       module.loaded = true;
     } catch (error) {
       // Remove from cache on error
       delete moduleCache[resolvedPath];
+      if (error instanceof Error && !error.message.includes('[while loading')) {
+        error.message = `${error.message} [while loading ${resolvedPath}]`;
+      }
       throw error;
     }
 
@@ -700,6 +1063,14 @@ ${code}
     // Handle node: protocol prefix (Node.js 16+)
     if (id.startsWith('node:')) {
       id = id.slice(5);
+    }
+
+    if (id === 'bun') {
+      return bun;
+    }
+
+    if (id.startsWith('bun:') && builtinModules[id]) {
+      return builtinModules[id];
     }
 
     // Built-in modules
@@ -735,7 +1106,9 @@ ${code}
             process,
             fromDir,
             moduleCache,
-            options
+            options,
+            undefined,
+            bun
           );
           newRequire.cache = moduleCache;
           return newRequire;
@@ -792,7 +1165,7 @@ ${code}
   };
 
   require.resolve = (id: string): string => {
-    if (id === 'fs' || id === 'process' || builtinModules[id]) {
+    if (id === 'bun' || id === 'fs' || id === 'process' || builtinModules[id]) {
       return id;
     }
     return resolveModule(id, currentDir);
@@ -863,6 +1236,7 @@ export class Runtime {
   private vfs: VirtualFS;
   private fsShim: FsShim;
   private process: Process;
+  private bunModule: BunModule;
   private moduleCache: Record<string, Module> = {};
   private options: RuntimeOptions;
   /** Cache for pre-processed code (after ESM transform) before eval */
@@ -874,10 +1248,13 @@ export class Runtime {
     this.process = createProcess({
       cwd: options.cwd || '/',
       env: options.env,
+      argv: options.argv,
     });
     // Create fs shim with cwd getter for relative path resolution
     this.fsShim = createFsShim(vfs, () => this.process.cwd());
+    this.bunModule = createBunModule(this.fsShim, this.process);
     this.options = options;
+    (globalThis as typeof globalThis & { __almostbunFsShim?: FsShim }).__almostbunFsShim = this.fsShim;
 
     // Initialize child_process with VFS for bash command support
     initChildProcess(vfs);
@@ -896,6 +1273,58 @@ export class Runtime {
     // Polyfill TextDecoder to handle base64/base64url/hex gracefully
     // (Some CLI tools incorrectly try to use TextDecoder for these)
     this.setupTextDecoderPolyfill();
+
+    // Polyfill global setImmediate/clearImmediate used by many Node HTTP packages.
+    this.setupImmediatePolyfill();
+  }
+
+  private setupImmediatePolyfill(): void {
+    const runtimeGlobal = globalThis as typeof globalThis & {
+      setImmediate?: (callback: (...args: unknown[]) => void, ...args: unknown[]) => unknown;
+      clearImmediate?: (handle: unknown) => void;
+      __almostbunImmediateHandles?: Map<number, ReturnType<typeof setTimeout>>;
+      __almostbunImmediateNextId?: number;
+    };
+
+    if (typeof runtimeGlobal.setImmediate === 'function' && typeof runtimeGlobal.clearImmediate === 'function') {
+      return;
+    }
+
+    if (!runtimeGlobal.__almostbunImmediateHandles) {
+      runtimeGlobal.__almostbunImmediateHandles = new Map<number, ReturnType<typeof setTimeout>>();
+      runtimeGlobal.__almostbunImmediateNextId = 1;
+    }
+
+    if (typeof runtimeGlobal.setImmediate !== 'function') {
+      runtimeGlobal.setImmediate = ((callback: (...args: unknown[]) => void, ...args: unknown[]) => {
+        const id = runtimeGlobal.__almostbunImmediateNextId ?? 1;
+        runtimeGlobal.__almostbunImmediateNextId = id + 1;
+        const handle = setTimeout(() => {
+          runtimeGlobal.__almostbunImmediateHandles?.delete(id);
+          callback(...args);
+        }, 0);
+        runtimeGlobal.__almostbunImmediateHandles?.set(id, handle);
+        return id;
+      }) as any;
+    }
+
+    if (typeof runtimeGlobal.clearImmediate !== 'function') {
+      runtimeGlobal.clearImmediate = (handle: unknown) => {
+        const id = typeof handle === 'number'
+          ? handle
+          : Number.parseInt(String(handle), 10);
+        if (!Number.isFinite(id)) {
+          return;
+        }
+        const timeoutHandle = runtimeGlobal.__almostbunImmediateHandles?.get(id);
+        if (timeoutHandle !== undefined) {
+          clearTimeout(timeoutHandle);
+          runtimeGlobal.__almostbunImmediateHandles?.delete(id);
+          return;
+        }
+        clearTimeout(id);
+      };
+    }
   }
 
   /**
@@ -1128,7 +1557,8 @@ export class Runtime {
       dirname,
       this.moduleCache,
       this.options,
-      this.processedCodeCache
+      this.processedCodeCache,
+      this.bunModule
     );
 
     // Create module object
@@ -1151,7 +1581,7 @@ export class Runtime {
     // Use the same wrapper pattern as loadModule for consistency
     try {
       const importMetaUrl = 'file://' + filename;
-      const wrappedCode = `(function($exports, $require, $module, $filename, $dirname, $process, $console, $importMeta) {
+      const wrappedCode = `(function($exports, $require, $module, $filename, $dirname, $process, $console, $importMeta, $bun) {
 var exports = $exports;
 var require = $require;
 var module = $module;
@@ -1160,10 +1590,13 @@ var __dirname = $dirname;
 var process = $process;
 var console = $console;
 var import_meta = $importMeta;
+var Bun = $bun;
 // Set up global.process and globalThis.process for code that accesses them directly
 var global = globalThis;
 globalThis.process = $process;
 global.process = $process;
+globalThis.Bun = $bun;
+global.Bun = $bun;
 
 return (function() {
 ${code}
@@ -1179,7 +1612,8 @@ ${code}
         dirname,
         this.process,
         consoleWrapper,
-        { url: importMetaUrl, dirname, filename }
+        { url: importMetaUrl, dirname, filename },
+        this.bunModule
       );
 
       module.loaded = true;
@@ -1211,8 +1645,33 @@ ${code}
    * Run a file from the virtual file system (synchronous - backward compatible)
    */
   runFile(filename: string): { exports: unknown; module: Module } {
-    const code = this.vfs.readFileSync(filename, 'utf8');
-    return this.execute(code, filename);
+    const entryPath = filename.startsWith('/')
+      ? filename
+      : pathShim.resolve(this.process.cwd(), filename);
+    const require = createRequire(
+      this.vfs,
+      this.fsShim,
+      this.process,
+      pathShim.dirname(entryPath),
+      this.moduleCache,
+      this.options,
+      this.processedCodeCache,
+      this.bunModule
+    );
+    require.cache = this.moduleCache;
+
+    const resolvedPath = require.resolve(entryPath);
+    const exports = require(resolvedPath);
+    const module = this.moduleCache[resolvedPath] || {
+      id: resolvedPath,
+      filename: resolvedPath,
+      exports,
+      loaded: true,
+      children: [],
+      paths: [],
+    };
+
+    return { exports, module };
   }
 
   /**
@@ -1273,11 +1732,13 @@ ${code}
       '/',
       this.moduleCache,
       this.options,
-      this.processedCodeCache
+      this.processedCodeCache,
+      this.bunModule
     );
     const consoleWrapper = createConsoleWrapper(this.options.onConsole);
     const process = this.process;
     const buffer = bufferShim.Buffer;
+    const bun = this.bunModule;
 
     // Use a Generator to maintain a persistent eval scope.
     // Generator functions preserve their local scope across yields, so
@@ -1289,7 +1750,9 @@ ${code}
       'console',
       'process',
       'Buffer',
+      'Bun',
       `var __code, __result;
+globalThis.Bun = Bun;
 while (true) {
   __code = yield;
   try {
@@ -1299,7 +1762,7 @@ while (true) {
     yield { value: undefined, error: e };
   }
 }`
-    )(require, consoleWrapper, process, buffer);
+    )(require, consoleWrapper, process, buffer, bun);
     replGen.next(); // prime the generator
 
     return {

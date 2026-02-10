@@ -658,16 +658,23 @@ export class NextDevServer extends DevServer {
    */
   private async serveAppComponent(pathname: string): Promise<ResponseData> {
     // Extract the file path from /_next/app prefix
-    const rawFilePath = pathname.replace('/_next/app', '');
+    let rawFilePath = pathname.replace('/_next/app', '');
+    if (rawFilePath.startsWith('/app/app/')) {
+      rawFilePath = rawFilePath.replace('/app/app/', '/app/');
+    }
+
+    const appRelativePath = rawFilePath.startsWith('/app')
+      ? `${this.appDir}${rawFilePath.slice('/app'.length)}`
+      : rawFilePath;
 
     // First, try the path as-is (handles imports with explicit extensions like .tsx/.ts)
-    if (this.exists(rawFilePath) && !this.isDirectory(rawFilePath)) {
-      return this.transformAndServe(rawFilePath, rawFilePath);
+    if (this.exists(appRelativePath) && !this.isDirectory(appRelativePath)) {
+      return this.transformAndServe(appRelativePath, appRelativePath);
     }
 
     // Strip .js extension and try different extensions
     // e.g. /_next/app/app/about/page.js → /app/about/page → /app/about/page.tsx
-    const filePath = rawFilePath.replace(/\.js$/, '');
+    const filePath = appRelativePath.replace(/\.js$/, '');
 
     const extensions = ['.tsx', '.jsx', '.ts', '.js'];
     for (const ext of extensions) {

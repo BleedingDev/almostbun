@@ -56,6 +56,13 @@ describe('Node.js built-in modules for Vite', () => {
 
     // Module system
     'module',
+
+    // Bun built-ins
+    'bun',
+    'bun:sqlite',
+    'bun:test',
+    'bun:ffi',
+    'bun:jsc',
   ];
 
   for (const moduleName of requiredModules) {
@@ -90,5 +97,23 @@ describe('Node.js built-in modules for Vite', () => {
 
     expect(result.path).toBe('object');
     expect(result.fs).toBe('object');
+  });
+
+  it('should handle bun modules', () => {
+    const code = `
+      const bun = require('bun');
+      const sqlite = require('bun:sqlite');
+      module.exports = {
+        bun: typeof bun,
+        sqliteDb: typeof sqlite.Database,
+      };
+    `;
+
+    vfs.writeFileSync('/test-bun-modules.js', code);
+    const { exports } = runtime.runFile('/test-bun-modules.js');
+    const result = exports as { bun: string; sqliteDb: string };
+
+    expect(result.bun).toBe('object');
+    expect(result.sqliteDb).toBe('function');
   });
 });

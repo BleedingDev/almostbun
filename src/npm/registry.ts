@@ -3,12 +3,15 @@
  * Fetches package metadata from npm registry
  */
 
+import { fetchWithRetry } from './fetch';
+
 export interface PackageVersion {
   name: string;
   version: string;
   dependencies?: Record<string, string>;
   devDependencies?: Record<string, string>;
   peerDependencies?: Record<string, string>;
+  peerDependenciesMeta?: Record<string, { optional?: boolean }>;
   optionalDependencies?: Record<string, string>;
   dist: {
     tarball: string;
@@ -58,11 +61,19 @@ export class Registry {
 
     const url = `${this.registryUrl}/${encodePackageName(packageName)}`;
 
-    const response = await fetch(url, {
-      headers: {
-        Accept: 'application/vnd.npm.install-v1+json; q=1.0, application/json; q=0.8',
+    const response = await fetchWithRetry(
+      url,
+      {
+        headers: {
+          Accept: 'application/vnd.npm.install-v1+json; q=1.0, application/json; q=0.8',
+        },
       },
-    });
+      {
+        onRetry: () => {
+          // no-op by default; callers can add progress hooks at a higher layer
+        },
+      }
+    );
 
     if (!response.ok) {
       if (response.status === 404) {
@@ -121,7 +132,7 @@ export class Registry {
    * Download tarball as ArrayBuffer
    */
   async downloadTarball(tarballUrl: string): Promise<ArrayBuffer> {
-    const response = await fetch(tarballUrl);
+    const response = await fetchWithRetry(tarballUrl);
 
     if (!response.ok) {
       throw new Error(`Failed to download tarball: ${response.status}`);

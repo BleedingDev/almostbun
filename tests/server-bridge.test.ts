@@ -117,10 +117,11 @@ describe('ServerBridge', () => {
 
       // Mock MessageChannel
       const originalMessageChannel = globalThis.MessageChannel;
-      globalThis.MessageChannel = vi.fn().mockImplementation(() => ({
-        port1: { onmessage: null },
-        port2: {},
-      })) as any;
+      class MockMessageChannel {
+        port1 = { onmessage: null as MessageEventHandler | null, postMessage: vi.fn() };
+        port2 = {};
+      }
+      globalThis.MessageChannel = MockMessageChannel as any;
 
       const bridge = new ServerBridge();
 
@@ -160,10 +161,11 @@ describe('ServerBridge', () => {
 
       // Mock MessageChannel
       const originalMessageChannel = globalThis.MessageChannel;
-      globalThis.MessageChannel = vi.fn().mockImplementation(() => ({
-        port1: { onmessage: null },
-        port2: {},
-      })) as any;
+      class MockMessageChannel {
+        port1 = { onmessage: null as MessageEventHandler | null, postMessage: vi.fn() };
+        port2 = {};
+      }
+      globalThis.MessageChannel = MockMessageChannel as any;
 
       const bridge = new ServerBridge();
 
@@ -175,6 +177,166 @@ describe('ServerBridge', () => {
 
       expect(mockServiceWorker.register).toHaveBeenCalledWith('/custom/path/__sw__.js', { scope: '/' });
       expect(registeredUrl).toBe('/custom/path/__sw__.js');
+
+      globalThis.MessageChannel = originalMessageChannel;
+    });
+
+    it('should reuse existing active registration when already controlled', async () => {
+      const update = vi.fn().mockResolvedValue(undefined);
+      const active = {
+        state: 'activated',
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        postMessage: vi.fn(),
+      };
+
+      const registration = {
+        active,
+        waiting: null,
+        installing: null,
+        update,
+      };
+
+      const mockServiceWorker = {
+        controller: {},
+        addEventListener: vi.fn(),
+        message: vi.fn(),
+        register: vi.fn(),
+        getRegistration: vi.fn().mockResolvedValue(registration),
+      };
+
+      Object.defineProperty(globalThis, 'navigator', {
+        value: { serviceWorker: mockServiceWorker },
+        writable: true,
+        configurable: true,
+      });
+
+      const originalMessageChannel = globalThis.MessageChannel;
+      class MockMessageChannel {
+        port1 = { onmessage: null as MessageEventHandler | null, postMessage: vi.fn() };
+        port2 = {};
+      }
+      globalThis.MessageChannel = MockMessageChannel as any;
+
+      const bridge = new ServerBridge();
+      await bridge.initServiceWorker();
+
+      expect(mockServiceWorker.getRegistration).toHaveBeenCalledWith('/');
+      expect(mockServiceWorker.register).not.toHaveBeenCalled();
+      expect(update).toHaveBeenCalled();
+
+      globalThis.MessageChannel = originalMessageChannel;
+    });
+
+    it('should retry registration after unregistering stale registrations', async () => {
+      const staleUnregister = vi.fn().mockResolvedValue(true);
+      const active = {
+        state: 'activated',
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        postMessage: vi.fn(),
+      };
+
+      const mockServiceWorker = {
+        controller: {},
+        addEventListener: vi.fn(),
+        register: vi.fn()
+          .mockRejectedValueOnce(new Error('initial register failed'))
+          .mockResolvedValueOnce({
+            active,
+            waiting: null,
+            installing: null,
+          }),
+        getRegistration: vi.fn().mockResolvedValue(null),
+        getRegistrations: vi.fn().mockResolvedValue([
+          { unregister: staleUnregister },
+        ]),
+      };
+
+      Object.defineProperty(globalThis, 'navigator', {
+        value: { serviceWorker: mockServiceWorker },
+        writable: true,
+        configurable: true,
+      });
+
+      const originalMessageChannel = globalThis.MessageChannel;
+      class MockMessageChannel {
+        port1 = { onmessage: null as MessageEventHandler | null, postMessage: vi.fn() };
+        port2 = {};
+      }
+      globalThis.MessageChannel = MockMessageChannel as any;
+
+      const bridge = new ServerBridge();
+      await bridge.initServiceWorker();
+
+      expect(mockServiceWorker.register).toHaveBeenCalledTimes(2);
+      expect(mockServiceWorker.register).toHaveBeenNthCalledWith(1, '/__sw__.js', { scope: '/' });
+      expect(mockServiceWorker.register).toHaveBeenNthCalledWith(
+        2,
+        expect.stringMatching(/^\/__sw__\.js\?almostbun-sw-retry=\d+$/),
+        { scope: '/' }
+      );
+      expect(mockServiceWorker.getRegistrations).toHaveBeenCalledTimes(1);
+      expect(staleUnregister).toHaveBeenCalledTimes(1);
+
+      globalThis.MessageChannel = originalMessageChannel;
+    });
+
+    it('should fall back to /almostbun-sw.js when __sw__.js retries keep failing', async () => {
+      const staleUnregister = vi.fn().mockResolvedValue(true);
+      const active = {
+        state: 'activated',
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        postMessage: vi.fn(),
+      };
+
+      const mockServiceWorker = {
+        controller: {},
+        addEventListener: vi.fn(),
+        register: vi.fn()
+          .mockRejectedValueOnce(new Error('initial register failed'))
+          .mockRejectedValueOnce(new Error('retry register failed'))
+          .mockResolvedValueOnce({
+            active,
+            waiting: null,
+            installing: null,
+          }),
+        getRegistration: vi.fn().mockResolvedValue(null),
+        getRegistrations: vi.fn().mockResolvedValue([
+          { unregister: staleUnregister },
+        ]),
+      };
+
+      Object.defineProperty(globalThis, 'navigator', {
+        value: { serviceWorker: mockServiceWorker },
+        writable: true,
+        configurable: true,
+      });
+
+      const originalMessageChannel = globalThis.MessageChannel;
+      class MockMessageChannel {
+        port1 = { onmessage: null as MessageEventHandler | null, postMessage: vi.fn() };
+        port2 = {};
+      }
+      globalThis.MessageChannel = MockMessageChannel as any;
+
+      const bridge = new ServerBridge();
+      await bridge.initServiceWorker();
+
+      expect(mockServiceWorker.register).toHaveBeenCalledTimes(3);
+      expect(mockServiceWorker.register).toHaveBeenNthCalledWith(1, '/__sw__.js', { scope: '/' });
+      expect(mockServiceWorker.register).toHaveBeenNthCalledWith(
+        2,
+        expect.stringMatching(/^\/__sw__\.js\?almostbun-sw-retry=\d+$/),
+        { scope: '/' }
+      );
+      expect(mockServiceWorker.register).toHaveBeenNthCalledWith(
+        3,
+        expect.stringMatching(/^\/almostbun-sw\.js\?almostbun-sw-fallback=\d+$/),
+        { scope: '/' }
+      );
+      expect(staleUnregister).toHaveBeenCalledTimes(1);
 
       globalThis.MessageChannel = originalMessageChannel;
     });

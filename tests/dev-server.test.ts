@@ -392,6 +392,83 @@ h1 {
 
       expect(response.statusCode).toBe(404);
     });
+
+    it('serves a synthetic index.html when only src/client entry exists', async () => {
+      const tanStackVfs = new VirtualFS();
+      tanStackVfs.mkdirSync('/project/src', { recursive: true });
+      tanStackVfs.writeFileSync('/project/src/client.tsx', 'console.log("client entry");');
+
+      const tanStackServer = new ViteDevServer(tanStackVfs, {
+        port: 3010,
+        root: '/project',
+        disableHmrInjection: true,
+      });
+
+      try {
+        const response = await tanStackServer.handleRequest('GET', '/', {});
+        const body = response.body.toString();
+
+        expect(response.statusCode).toBe(200);
+        expect(body).toContain('<div id="root"></div>');
+        expect(body).toContain('src="/__virtual__/3010/src/client.tsx"');
+      } finally {
+        tanStackServer.stop();
+      }
+    });
+
+    it('serves TanStack Start synthetic client module when only src/router exists', async () => {
+      const tanStackVfs = new VirtualFS();
+      tanStackVfs.mkdirSync('/project/src', { recursive: true });
+      tanStackVfs.writeFileSync(
+        '/project/package.json',
+        JSON.stringify({
+          name: 'tanstack-start-app',
+          dependencies: {
+            '@tanstack/react-start': '^1.0.0',
+          },
+        })
+      );
+      tanStackVfs.writeFileSync('/project/src/router.tsx', 'export function createRouter() { return {}; }');
+
+      const tanStackServer = new ViteDevServer(tanStackVfs, {
+        port: 3012,
+        root: '/project',
+        disableHmrInjection: true,
+      });
+
+      try {
+        const rootResponse = await tanStackServer.handleRequest('GET', '/', {});
+        const rootHtml = rootResponse.body.toString();
+        expect(rootResponse.statusCode).toBe(200);
+        expect(rootHtml).toContain('src="/__virtual__/3012/@almostbun/tanstack-start-client-entry.js"');
+
+        const moduleResponse = await tanStackServer.handleRequest('GET', '/@almostbun/tanstack-start-client-entry.js', {});
+        const moduleCode = moduleResponse.body.toString();
+        expect(moduleResponse.statusCode).toBe(200);
+        expect(moduleCode).toContain('/__virtual__/3012/src/router.tsx');
+        expect(moduleCode).toContain('RouterProvider');
+      } finally {
+        tanStackServer.stop();
+      }
+    });
+
+    it('does not synthesize index.html when no client entry candidate exists', async () => {
+      const emptyVfs = new VirtualFS();
+      emptyVfs.mkdirSync('/project/src', { recursive: true });
+      emptyVfs.writeFileSync('/project/src/other.ts', 'export const noop = true;');
+
+      const emptyServer = new ViteDevServer(emptyVfs, {
+        port: 3011,
+        root: '/project',
+      });
+
+      try {
+        const response = await emptyServer.handleRequest('GET', '/', {});
+        expect(response.statusCode).toBe(404);
+      } finally {
+        emptyServer.stop();
+      }
+    });
   });
 
   describe('HMR client injection', () => {
@@ -416,6 +493,79 @@ h1 {
       const headCloseIndex = body.indexOf('</head>');
 
       expect(hmrIndex).toBeLessThan(headCloseIndex);
+    });
+
+    it('rewrites absolute HTML asset URLs to virtual server paths', async () => {
+      const response = await server.handleRequest('GET', '/', {});
+      const body = response.body.toString();
+
+      expect(body).toContain('src="/__virtual__/3000/src/main.jsx"');
+    });
+
+    it('rewrites absolute HTML asset URLs when HMR injection is disabled', async () => {
+      const noHmrServer = new ViteDevServer(vfs, {
+        port: 3000,
+        disableHmrInjection: true,
+      });
+
+      try {
+        const response = await noHmrServer.handleRequest('GET', '/', {});
+        const body = response.body.toString();
+        expect(body).toContain('src="/__virtual__/3000/src/main.jsx"');
+        expect(body).not.toContain('vite-hmr');
+      } finally {
+        noHmrServer.stop();
+      }
+    });
+
+    it('injects framework import map entries for non-transformed JS entry files', async () => {
+      const response = await server.handleRequest('GET', '/', {});
+      const body = response.body.toString();
+
+      expect(body).toContain('"vue":"https://esm.sh/vue@3.5.28?dev"');
+      expect(body).toContain('"svelte":"https://esm.sh/svelte@5.39.6"');
+      expect(body).toContain('"solid-js":"https://esm.sh/solid-js@1.9.9?dev"');
+      expect(body).toContain('"preact":"https://esm.sh/preact@10.27.2?dev"');
+    });
+
+    it('uses project React versions in import-map and rewritten module imports', async () => {
+      const react19Vfs = new VirtualFS();
+      react19Vfs.mkdirSync('/project/src', { recursive: true });
+      react19Vfs.writeFileSync(
+        '/project/package.json',
+        JSON.stringify({
+          name: 'react19-app',
+          dependencies: {
+            react: '^19.0.0',
+            'react-dom': '^19.0.0',
+          },
+        })
+      );
+      react19Vfs.writeFileSync(
+        '/project/index.html',
+        '<!doctype html><html><head></head><body><div id="root"></div><script type="module" src="/src/main.tsx"></script></body></html>'
+      );
+      react19Vfs.writeFileSync('/project/src/main.tsx', "import React from 'react'; export default React;");
+
+      const react19Server = new ViteDevServer(react19Vfs, {
+        port: 3013,
+        root: '/project',
+        disableHmrInjection: true,
+      });
+
+      try {
+        const htmlResponse = await react19Server.handleRequest('GET', '/', {});
+        const html = htmlResponse.body.toString();
+        expect(html).toContain('"react":"https://esm.sh/react@19?dev"');
+        expect(html).toContain('"react-dom/client":"https://esm.sh/react-dom@19/client?dev"');
+
+        const moduleResponse = await react19Server.handleRequest('GET', '/src/main.tsx', {});
+        const moduleCode = moduleResponse.body.toString();
+        expect(moduleCode).toContain('https://esm.sh/react@19?dev');
+        expect(moduleCode).not.toContain('https://esm.sh/react@18.2.0?dev');
+      } finally {
+        react19Server.stop();
+      }
     });
   });
 
@@ -459,6 +609,131 @@ export default Button;`
 
       expect(response.statusCode).toBe(200);
       expect(response.headers['Content-Type']).toBe('application/javascript; charset=utf-8');
+    });
+
+    it('routes Vue SFC requests through transform pipeline', async () => {
+      vfs.writeFileSync(
+        '/src/Widget.vue',
+        `<template><p>Hello Vue</p></template>
+<script setup>
+const msg = 'hello';
+</script>`
+      );
+
+      const response = await server.handleRequest('GET', '/src/Widget.vue', {});
+
+      expect(response.statusCode).toBe(200);
+      expect(response.headers['Content-Type']).toBe('application/javascript; charset=utf-8');
+      expect(response.headers['X-Transform-Error'] ?? response.headers['X-Transformed']).toBeDefined();
+    });
+
+    it('resolves extensionless imports to .vue files', async () => {
+      vfs.writeFileSync('/src/Extensionless.vue', '<template><div>Hi</div></template>');
+
+      const response = await server.handleRequest('GET', '/src/Extensionless', {});
+
+      expect(response.statusCode).toBe(200);
+      expect(response.headers['Content-Type']).toBe('application/javascript; charset=utf-8');
+      expect(response.headers['X-Transform-Error'] ?? response.headers['X-Transformed']).toBeDefined();
+    });
+
+    it('routes Svelte component requests through transform pipeline', async () => {
+      vfs.writeFileSync('/src/App.svelte', '<h1>Hello Svelte</h1>');
+
+      const response = await server.handleRequest('GET', '/src/App.svelte', {});
+
+      expect(response.statusCode).toBe(200);
+      expect(response.headers['Content-Type']).toBe('application/javascript; charset=utf-8');
+      expect(response.headers['X-Transform-Error'] ?? response.headers['X-Transformed']).toBeDefined();
+    });
+
+    it('resolves extensionless imports to .svelte files', async () => {
+      vfs.writeFileSync('/src/ExtensionlessSvelte.svelte', '<h1>Hello</h1>');
+
+      const response = await server.handleRequest('GET', '/src/ExtensionlessSvelte', {});
+
+      expect(response.statusCode).toBe(200);
+      expect(response.headers['Content-Type']).toBe('application/javascript; charset=utf-8');
+      expect(response.headers['X-Transform-Error'] ?? response.headers['X-Transformed']).toBeDefined();
+    });
+
+    it('resolves extensionless .tsx when sibling directory exists', async () => {
+      vfs.mkdirSync('/src/routes/_pathlessLayout', { recursive: true });
+      vfs.writeFileSync('/src/routes/_pathlessLayout.tsx', 'export default function Route() { return null; }');
+      vfs.writeFileSync('/src/routes/_pathlessLayout/_nested-layout.tsx', 'export default function Nested() { return null; }');
+
+      const response = await server.handleRequest('GET', '/src/routes/_pathlessLayout', {});
+
+      expect(response.statusCode).toBe(200);
+      expect(response.headers['Content-Type']).toBe('application/javascript; charset=utf-8');
+    });
+
+    it('resolves baseUrl-style bare source imports to local virtual paths', async () => {
+      vfs.mkdirSync('/src/components', { recursive: true });
+      vfs.mkdirSync('/src/routes', { recursive: true });
+      vfs.writeFileSync('/src/components/UserError.tsx', 'export function UserErrorComponent() { return null; }');
+      vfs.writeFileSync(
+        '/src/routes/user.tsx',
+        `import { UserErrorComponent } from 'src/components/UserError';\nexport default UserErrorComponent;`
+      );
+
+      const response = await server.handleRequest('GET', '/src/routes/user.tsx', {});
+      const code = response.body.toString();
+
+      expect(response.statusCode).toBe(200);
+      expect(code).toContain('/__virtual__/3000/src/components/UserError');
+      expect(code).not.toContain('https://esm.sh/src/components/UserError');
+    });
+
+    it('rewrites TanStack Start client entry to RouterProvider fallback', async () => {
+      vfs.writeFileSync(
+        '/src/client.tsx',
+        `import { hydrateRoot } from 'react-dom/client';
+import { StartClient } from '@tanstack/react-start';
+import { createRouter } from './router';
+const router = createRouter();
+hydrateRoot(document, <StartClient router={router} />);`
+      );
+
+      const response = await server.handleRequest('GET', '/src/client.tsx', {});
+      const code = response.body.toString();
+
+      expect(response.statusCode).toBe(200);
+      expect(code).toContain('RouterProvider');
+      expect(code).toContain('createRoot(document.getElementById(\'root\') || document.body).render(');
+      expect(code).not.toContain('StartClient');
+      expect(code).not.toContain('hydrateRoot(document');
+    });
+
+    it('injects TanStack router basepath for virtual server paths', async () => {
+      vfs.writeFileSync(
+        '/src/client-main.tsx',
+        `import { createRouter } from '@tanstack/react-router';
+const router = createRouter({ routeTree, context: { queryClient } });
+export { router };`
+      );
+
+      const response = await server.handleRequest('GET', '/src/client-main.tsx', {});
+      const code = response.body.toString();
+
+      expect(response.statusCode).toBe(200);
+      expect(code).toContain('basepath: window.location.pathname.match(/^\\/__virtual__\\/\\d+/)[0]');
+    });
+
+    it('keeps TanStack router basepath when app already provides one', async () => {
+      vfs.writeFileSync(
+        '/src/client-main-existing-basepath.tsx',
+        `import { createRouter } from '@tanstack/react-router';
+const router = createRouter({ basepath: '/custom', routeTree });
+export { router };`
+      );
+
+      const response = await server.handleRequest('GET', '/src/client-main-existing-basepath.tsx', {});
+      const code = response.body.toString();
+
+      expect(response.statusCode).toBe(200);
+      expect(code).not.toContain('window.location.pathname.match(/^\\/__virtual__\\/\\d+/)');
+      expect(code).toContain("basepath: '/custom'");
     });
   });
 

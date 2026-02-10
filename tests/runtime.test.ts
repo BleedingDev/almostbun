@@ -41,6 +41,37 @@ describe('Runtime', () => {
       `);
       expect(exports).toEqual({ hello: 'world' });
     });
+
+    it('should expose global setImmediate/clearImmediate', () => {
+      const { exports } = runtime.execute(`
+        module.exports = {
+          hasSetImmediate: typeof setImmediate === 'function',
+          hasClearImmediate: typeof clearImmediate === 'function',
+        };
+      `);
+
+      expect(exports).toEqual({
+        hasSetImmediate: true,
+        hasClearImmediate: true,
+      });
+    });
+
+    it('should run callbacks scheduled via global setImmediate', async () => {
+      runtime.execute(`
+        globalThis.__runtimeImmediateFlag = false;
+        setImmediate(() => {
+          globalThis.__runtimeImmediateFlag = true;
+        });
+      `);
+
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      const { exports } = runtime.execute(`
+        module.exports = globalThis.__runtimeImmediateFlag;
+      `);
+
+      expect(exports).toBe(true);
+    });
   });
 
   describe('fs shim', () => {
@@ -99,6 +130,34 @@ describe('Runtime', () => {
     });
   });
 
+  describe('constants shim', () => {
+    it('should provide constants module', () => {
+      const { exports } = runtime.execute(`
+        const constants = require('constants');
+        module.exports = {
+          fOk: constants.F_OK,
+          rOk: constants.R_OK,
+          sigint: constants.SIGINT,
+        };
+      `);
+
+      expect(exports).toEqual({
+        fOk: 0,
+        rOk: 4,
+        sigint: 2,
+      });
+    });
+
+    it('should support node:constants protocol', () => {
+      const { exports } = runtime.execute(`
+        const constants = require('node:constants');
+        module.exports = constants.W_OK;
+      `);
+
+      expect(exports).toBe(2);
+    });
+  });
+
   describe('path shim', () => {
     it('should provide path module', () => {
       const { exports } = runtime.execute(`
@@ -135,6 +194,7 @@ describe('Runtime', () => {
         module.exports = {
           cwd: process.cwd(),
           platform: process.platform,
+          arch: process.arch,
           hasEnv: typeof process.env === 'object',
         };
       `);
@@ -142,6 +202,7 @@ describe('Runtime', () => {
       expect(exports).toEqual({
         cwd: '/',
         platform: 'linux', // Pretend to be linux for Node.js compatibility
+        arch: 'x64',
         hasEnv: true,
       });
     });
@@ -153,6 +214,14 @@ describe('Runtime', () => {
       `);
 
       expect(exports).toBe('/');
+    });
+
+    it('should expose process.release.name', () => {
+      const { exports } = runtime.execute(`
+        module.exports = process.release && process.release.name;
+      `);
+
+      expect(exports).toBe('node');
     });
 
     it('should have EventEmitter methods on process', () => {
@@ -200,6 +269,52 @@ describe('Runtime', () => {
   });
 
   describe('module resolution', () => {
+    it('should provide node:wasi shim', () => {
+      const { exports } = runtime.execute(`
+        const { WASI } = require('node:wasi');
+        const wasi = new WASI({
+          version: 'preview1',
+          args: [],
+          env: {},
+          preopens: { '/': '/' },
+        });
+        module.exports = {
+          hasClass: typeof WASI === 'function',
+          hasGetImportObject: typeof wasi.getImportObject === 'function',
+        };
+      `);
+
+      expect(exports).toEqual({
+        hasClass: true,
+        hasGetImportObject: true,
+      });
+    });
+
+    it('allows native-addon fallback patterns when .node loading fails', () => {
+      vfs.mkdirSync('/native', { recursive: true });
+      vfs.writeFileSync(
+        '/native/index.js',
+        `
+        let binding;
+        try {
+          binding = require('./addon.node');
+        } catch (_err) {
+          binding = require('./fallback.js');
+        }
+        module.exports = binding;
+        `
+      );
+      // Simulate a binary addon payload that is not valid JS in browser runtime.
+      vfs.writeFileSync('/native/addon.node', '\u007fELF\\u0002\\u0001\\u0001');
+      vfs.writeFileSync('/native/fallback.js', 'module.exports = { mode: "fallback" };');
+
+      const { exports } = runtime.execute(`
+        module.exports = require('./native');
+      `);
+
+      expect(exports).toEqual({ mode: 'fallback' });
+    });
+
     it('should resolve relative modules', () => {
       vfs.writeFileSync('/lib/helper.js', 'module.exports = { value: 42 };');
 
@@ -231,6 +346,98 @@ describe('Runtime', () => {
       expect(exports).toBe('no ext');
     });
 
+    it('should execute shebang-prefixed modules', () => {
+      vfs.writeFileSync('/dep.mjs', 'export default 42;');
+      vfs.writeFileSync(
+        '/script.mjs',
+        '#!/usr/bin/env node\nimport value from "./dep.mjs";\nmodule.exports = value;\n'
+      );
+
+      const { exports } = runtime.runFile('/script.mjs');
+      expect(exports).toBe(42);
+    });
+
+    it('should support export async function in ESM fallback transforms', () => {
+      vfs.mkdirSync('/esm', { recursive: true });
+      vfs.writeFileSync('/esm/async-export.mjs', 'export async function loadApp() { return "ok"; }');
+
+      const { exports } = runtime.execute(`
+        const mod = require('./esm/async-export.mjs');
+        module.exports = typeof mod.loadApp;
+      `);
+
+      expect(exports).toBe('function');
+    });
+
+    it('should support re-export syntax in ESM fallback transforms', () => {
+      vfs.mkdirSync('/esm', { recursive: true });
+      vfs.writeFileSync('/esm/base.mjs', 'export const value = 7;');
+      vfs.writeFileSync('/esm/re-export.mjs', 'export { value } from "./base.mjs";');
+
+      const { exports } = runtime.execute(`
+        const mod = require('./esm/re-export.mjs');
+        module.exports = mod.value;
+      `);
+
+      expect(exports).toBe(7);
+    });
+
+    it('should resolve TypeScript modules without extension', () => {
+      vfs.writeFileSync('/lib/noext-ts.ts', 'module.exports = "no ext ts";');
+
+      const { exports } = runtime.execute(`
+        module.exports = require('./lib/noext-ts');
+      `);
+
+      expect(exports).toBe('no ext ts');
+    });
+
+    it('should resolve tsconfig path aliases', () => {
+      vfs.writeFileSync(
+        '/tsconfig.json',
+        JSON.stringify({
+          compilerOptions: {
+            baseUrl: '.',
+            paths: {
+              '@/*': ['src/*'],
+            },
+          },
+        })
+      );
+      vfs.writeFileSync('/src/shared/constants.ts', 'export const VALUE = 42;');
+
+      const { exports } = runtime.execute(
+        `
+        const constants = require('@/shared/constants');
+        module.exports = constants.VALUE;
+      `,
+        '/src/app.ts'
+      );
+
+      expect(exports).toBe(42);
+    });
+
+    it('should resolve package.json via tsconfig baseUrl', () => {
+      vfs.writeFileSync(
+        '/tsconfig.json',
+        JSON.stringify({
+          compilerOptions: {
+            baseUrl: '.',
+          },
+        })
+      );
+      vfs.writeFileSync('/package.json', JSON.stringify({ name: 'demo-app' }));
+
+      const { exports } = runtime.execute(
+        `
+        module.exports = require('package.json').name;
+      `,
+        '/src/app.ts'
+      );
+
+      expect(exports).toBe('demo-app');
+    });
+
     it('should resolve JSON modules', () => {
       vfs.writeFileSync('/data.json', '{"key": "value", "num": 123}');
 
@@ -250,6 +457,14 @@ describe('Runtime', () => {
       `);
 
       expect(exports).toBe('from index');
+    });
+
+    it('should resolve require(".") to the current directory index', () => {
+      vfs.writeFileSync('/pkg/index.js', 'module.exports = "pkg-index";');
+      vfs.writeFileSync('/pkg/entry.js', 'module.exports = require(".");');
+
+      const { exports } = runtime.runFile('/pkg/entry.js');
+      expect(exports).toBe('pkg-index');
     });
 
     it('should resolve node_modules packages', () => {
@@ -280,6 +495,31 @@ describe('Runtime', () => {
       `);
 
       expect(exports).toBe('simple');
+    });
+
+    it('should not transform bundled CJS files that contain import/export text in templates', () => {
+      vfs.writeFileSync(
+        '/node_modules/template-pkg/package.json',
+        '{"name": "template-pkg", "main": "index.js"}'
+      );
+      vfs.writeFileSync(
+        '/node_modules/template-pkg/index.js',
+        `var __create = Object.create;
+module.exports = function () {
+  return \`import path from "node:path";
+import { fileURLToPath } from "node:url";
+export default "x";
+\`;
+};`
+      );
+
+      const { exports } = runtime.execute(`
+        const makeCode = require('template-pkg');
+        module.exports = makeCode();
+      `);
+
+      expect(exports).toContain('import path from "node:path";');
+      expect(exports).toContain('export default "x";');
     });
 
     it('should cache modules', () => {
@@ -577,9 +817,8 @@ describe('Runtime', () => {
     });
   });
 
-  describe('browser field in package.json', () => {
-    it('should prefer browser field (string) over main for package entry', () => {
-      // Simulate depd's package.json: "browser": "lib/browser/index.js"
+  describe('package.json entry resolution', () => {
+    it('should prefer main over browser field for runtime require()', () => {
       vfs.writeFileSync('/node_modules/testpkg/package.json', JSON.stringify({
         name: 'testpkg',
         browser: 'lib/browser/index.js',
@@ -589,7 +828,7 @@ describe('Runtime', () => {
       vfs.writeFileSync('/node_modules/testpkg/lib/browser/index.js', 'module.exports = "browser";');
 
       const { exports } = runtime.execute('module.exports = require("testpkg");');
-      expect(exports).toBe('browser');
+      expect(exports).toBe('node');
     });
 
     it('should fall back to main when browser field is not set', () => {
@@ -611,6 +850,83 @@ describe('Runtime', () => {
 
       const { exports } = runtime.execute('module.exports = require("defpkg");');
       expect(exports).toBe('default');
+    });
+
+    it('should not apply browser field object remap for subpath imports', () => {
+      vfs.writeFileSync('/node_modules/browser-map-pkg/package.json', JSON.stringify({
+        name: 'browser-map-pkg',
+        browser: {
+          './lib/node.js': './lib/browser.js',
+        },
+      }));
+      vfs.writeFileSync('/node_modules/browser-map-pkg/lib/node.js', 'module.exports = "node-subpath";');
+      vfs.writeFileSync('/node_modules/browser-map-pkg/lib/browser.js', 'module.exports = "browser-subpath";');
+
+      const { exports } = runtime.execute('module.exports = require("browser-map-pkg/lib/node.js");');
+      expect(exports).toBe('node-subpath');
+    });
+
+    it('should resolve packages from pnpm virtual store without top-level symlink', () => {
+      vfs.writeFileSync(
+        '/node_modules/.pnpm/pnpm-only-pkg@1.0.0/node_modules/pnpm-only-pkg/package.json',
+        JSON.stringify({
+          name: 'pnpm-only-pkg',
+          exports: {
+            '.': {
+              default: './dist/index.js',
+            },
+          },
+        }),
+      );
+      vfs.writeFileSync(
+        '/node_modules/.pnpm/pnpm-only-pkg@1.0.0/node_modules/pnpm-only-pkg/dist/index.js',
+        'module.exports = "resolved-from-pnpm-store";'
+      );
+
+      const { exports } = runtime.execute('module.exports = require("pnpm-only-pkg");');
+      expect(exports).toBe('resolved-from-pnpm-store');
+    });
+
+    it('should not treat comment text containing "export" as ESM syntax', () => {
+      vfs.writeFileSync('/node_modules/mock-engine/package.json', JSON.stringify({
+        name: 'mock-engine',
+        main: 'index.js',
+      }));
+      vfs.writeFileSync(
+        '/node_modules/mock-engine/index.js',
+        'module.exports = { __express: function mockExpress() { return "ok"; } };'
+      );
+
+      vfs.writeFileSync(
+        '/view-like.js',
+        `module.exports = function loadEngine(engines) {
+  if (!engines['.ejs']) {
+    // default engine export
+    var fn = require('mock-engine').__express
+    engines['.ejs'] = fn
+  }
+  return engines['.ejs']
+}
+module.exports.__esmFlag = Object.prototype.hasOwnProperty.call(exports, '__esModule')
+`
+      );
+
+      const { exports } = runtime.execute(`
+        const load = require('/view-like.js');
+        const engines = {};
+        const engine = load(engines);
+        module.exports = {
+          name: engine.name,
+          rendered: engine(),
+          esmFlag: load.__esmFlag,
+        };
+      `);
+
+      expect(exports).toEqual({
+        name: 'mockExpress',
+        rendered: 'ok',
+        esmFlag: false,
+      });
     });
   });
 

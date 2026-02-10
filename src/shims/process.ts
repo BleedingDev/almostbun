@@ -41,8 +41,16 @@ export interface Process {
   cwd: () => string;
   chdir: (directory: string) => void;
   platform: string;
+  arch: string;
   version: string;
   versions: { node: string; v8: string; uv: string };
+  release: {
+    name: string;
+    lts?: string;
+    sourceUrl?: string;
+    headersUrl?: string;
+    libUrl?: string;
+  };
   argv: string[];
   argv0: string;
   execPath: string;
@@ -162,9 +170,15 @@ function createProcessStream(
 export function createProcess(options?: {
   cwd?: string;
   env?: ProcessEnv;
+  argv?: string[];
+  argv0?: string;
   onExit?: (code: number) => void;
 }): Process {
   let currentDir = options?.cwd || '/';
+  const argv = options?.argv && options.argv.length > 0
+    ? [...options.argv]
+    : ['node', '/index.js'];
+  const argv0 = options?.argv0 || argv[0] || 'node';
   const env: ProcessEnv = {
     NODE_ENV: 'development',
     PATH: '/usr/local/bin:/usr/bin:/bin',
@@ -199,11 +213,18 @@ export function createProcess(options?: {
     },
 
     platform: 'linux', // Pretend to be linux for better compatibility
+    arch: 'x64',
     version: 'v20.0.0',
     versions: { node: '20.0.0', v8: '11.3.244.8', uv: '1.44.2' },
+    release: {
+      name: 'node',
+      lts: 'Iron',
+      sourceUrl: 'https://nodejs.org/dist/v20.0.0/node-v20.0.0.tar.gz',
+      headersUrl: 'https://nodejs.org/dist/v20.0.0/node-v20.0.0-headers.tar.gz',
+    },
 
-    argv: ['node', '/index.js'],
-    argv0: 'node',
+    argv,
+    argv0,
     execPath: '/usr/local/bin/node',
     execArgv: [],
 

@@ -166,6 +166,20 @@ describe('http module', () => {
       expect(addr?.port).toBe(3000);
     });
 
+    it('should listen when port is provided as a numeric string', async () => {
+      server = createServer();
+
+      await new Promise<void>((resolve) => {
+        server.listen('3006', () => {
+          resolve();
+        });
+      });
+
+      expect(server.listening).toBe(true);
+      const addr = server.address();
+      expect(addr?.port).toBe(3006);
+    });
+
     it('should emit listening event', async () => {
       server = createServer();
 

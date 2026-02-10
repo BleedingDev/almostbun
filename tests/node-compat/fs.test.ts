@@ -322,6 +322,11 @@ describe('fs module (Node.js compat)', () => {
       const realpath = fs.realpathSync('/dir/../dir/./file.txt');
       assert.strictEqual(realpath, '/dir/file.txt');
     });
+
+    it('should expose realpath native helpers for compatibility', () => {
+      assert.strictEqual(typeof (fs.realpath as unknown as { native?: unknown }).native, 'function');
+      assert.strictEqual(typeof (fs.realpathSync as unknown as { native?: unknown }).native, 'function');
+    });
   });
 
   describe('fs.accessSync()', () => {

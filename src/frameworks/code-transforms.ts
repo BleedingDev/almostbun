@@ -215,6 +215,18 @@ function resolveNpmPackage(packageName: string): string | null {
 
   if (LOCAL_PACKAGES.has(scopedBasePkg)) return null;
 
+  if (packageName === 'solid-js' || packageName.startsWith('solid-js/')) {
+    return null;
+  }
+
+  if (packageName === 'svelte' || packageName.startsWith('svelte/')) {
+    const svelteVersion = '5.39.6';
+    if (packageName === 'svelte') {
+      return `https://esm.sh/svelte@${svelteVersion}`;
+    }
+    return `https://esm.sh/svelte@${svelteVersion}/${packageName.slice('svelte/'.length)}`;
+  }
+
   return `https://esm.sh/${packageName}?external=react`;
 }
 

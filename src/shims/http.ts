@@ -342,7 +342,7 @@ export class Server extends EventEmitter {
   }
 
   listen(
-    portOrOptions?: number | { port?: number; host?: string },
+    portOrOptions?: number | string | { port?: number | string; host?: string },
     hostOrCallback?: string | (() => void),
     callback?: () => void
   ): this {
@@ -350,16 +350,25 @@ export class Server extends EventEmitter {
     let host: string | undefined;
     let cb: (() => void) | undefined;
 
-    if (typeof portOrOptions === 'number') {
-      port = portOrOptions;
+    if (typeof portOrOptions === 'number' || typeof portOrOptions === 'string') {
+      const parsedPort = typeof portOrOptions === 'string'
+        ? Number.parseInt(portOrOptions, 10)
+        : portOrOptions;
+      port = Number.isFinite(parsedPort) ? parsedPort : undefined;
       if (typeof hostOrCallback === 'string') {
         host = hostOrCallback;
         cb = callback;
       } else {
         cb = hostOrCallback;
       }
-    } else if (portOrOptions) {
-      port = portOrOptions.port;
+    } else if (portOrOptions && typeof portOrOptions === 'object') {
+      const optionPort = portOrOptions.port;
+      if (typeof optionPort === 'number') {
+        port = optionPort;
+      } else if (typeof optionPort === 'string') {
+        const parsedPort = Number.parseInt(optionPort, 10);
+        port = Number.isFinite(parsedPort) ? parsedPort : undefined;
+      }
       host = portOrOptions.host;
       cb = typeof hostOrCallback === 'function' ? hostOrCallback : callback;
     }
@@ -500,8 +509,12 @@ export const METHODS = [
 
 // CORS proxy getter - checks localStorage for configured proxy
 function getCorsProxy(): string | null {
-  if (typeof localStorage !== 'undefined') {
-    return localStorage.getItem('__corsProxyUrl') || null;
+  if (
+    typeof localStorage !== 'undefined' &&
+    localStorage &&
+    typeof (localStorage as { getItem?: unknown }).getItem === 'function'
+  ) {
+    return (localStorage as { getItem: (key: string) => string | null }).getItem('__corsProxyUrl') || null;
   }
   return null;
 }

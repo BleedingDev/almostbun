@@ -9,8 +9,101 @@ import { VirtualFS } from './virtual-fs';
 
 // Check if we're in a browser environment
 const isBrowser = typeof window !== 'undefined';
+type NodeEsbuild = {
+  transformSync: (code: string, options: Record<string, unknown>) => { code: string };
+};
+
+let nodeEsbuild: NodeEsbuild | null = null;
+let nodeEsbuildPromise: Promise<NodeEsbuild | null> | null = null;
+
+const DYNAMIC_BUILTIN_MODULES = [
+  // Node built-ins
+  'assert', 'buffer', 'child_process', 'cluster', 'crypto', 'dgram', 'dns',
+  'events', 'fs', 'http', 'http2', 'https', 'net', 'os', 'path', 'perf_hooks',
+  'querystring', 'readline', 'stream', 'string_decoder', 'timers', 'tls',
+  'url', 'util', 'v8', 'vm', 'worker_threads', 'zlib', 'async_hooks', 'inspector', 'module',
+  // Bun built-ins
+  'bun', 'bun:sqlite', 'bun:test', 'bun:ffi', 'bun:jsc',
+];
+
+function escapeRegExp(literal: string): string {
+  return literal.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function patchDynamicBuiltinImports(code: string): string {
+  let transformed = code;
+
+  // Convert dynamic import() of node: modules to require()
+  transformed = transformed.replace(
+    /\bimport\s*\(\s*["']node:([^"']+)["']\s*\)/g,
+    'Promise.resolve(require("node:$1"))'
+  );
+
+  for (const builtin of DYNAMIC_BUILTIN_MODULES) {
+    // Match import("fs") or import('fs') but not import("fs-extra")
+    const pattern = new RegExp(`\\bimport\\s*\\(\\s*["']${escapeRegExp(builtin)}["']\\s*\\)`, 'g');
+    transformed = transformed.replace(pattern, `Promise.resolve(require("${builtin}"))`);
+  }
+
+  return transformed;
+}
 
 // Window.__esbuild type is declared in src/types/external.d.ts
+
+async function loadNodeEsbuild(): Promise<NodeEsbuild | null> {
+  if (isBrowser) {
+    return null;
+  }
+
+  if (nodeEsbuild) {
+    return nodeEsbuild;
+  }
+
+  if (nodeEsbuildPromise) {
+    return nodeEsbuildPromise;
+  }
+
+  nodeEsbuildPromise = (async () => {
+    try {
+      const specifier = 'esbuild';
+      let mod: { default?: unknown } | null = null;
+
+      try {
+        // Variable specifier avoids eager bundling while still working in Node/Vitest.
+        mod = await import(
+          /* @vite-ignore */
+          specifier
+        ) as { default?: unknown };
+      } catch {
+        // Fallback for runtimes where direct dynamic import is restricted.
+        const dynamicImport = new Function(
+          's',
+          'return import(s);'
+        ) as (s: string) => Promise<unknown>;
+        mod = await dynamicImport(specifier) as { default?: unknown };
+      }
+
+      const candidate = (mod.default || mod) as {
+        transformSync?: (code: string, options: Record<string, unknown>) => { code: string };
+      };
+      if (candidate && typeof candidate.transformSync === 'function') {
+        nodeEsbuild = {
+          transformSync: candidate.transformSync.bind(candidate),
+        };
+      } else {
+        nodeEsbuild = null;
+      }
+    } catch {
+      nodeEsbuild = null;
+    } finally {
+      nodeEsbuildPromise = null;
+    }
+
+    return nodeEsbuild;
+  })();
+
+  return nodeEsbuildPromise;
+}
 
 /**
  * Initialize esbuild-wasm (reuses existing instance if already initialized)
@@ -87,9 +180,38 @@ export async function transformFile(
   code: string,
   filename: string
 ): Promise<string> {
-  // Skip in non-browser environments
+  // Determine loader based on file extension
+  let loader: 'js' | 'jsx' | 'ts' | 'tsx' = 'js';
+  if (filename.endsWith('.jsx')) loader = 'jsx';
+  else if (filename.endsWith('.ts') || filename.endsWith('.mts') || filename.endsWith('.cts')) loader = 'ts';
+  else if (filename.endsWith('.tsx')) loader = 'tsx';
+  else if (filename.endsWith('.mjs') || filename.endsWith('.cjs')) loader = 'js';
+
+  // Node/test fallback: use native esbuild when available.
   if (!isBrowser) {
-    return code;
+    const esbuild = await loadNodeEsbuild();
+    if (!esbuild) {
+      return code;
+    }
+
+    try {
+      const result = esbuild.transformSync(code, {
+        loader,
+        format: 'cjs',
+        target: 'esnext',
+        platform: 'neutral',
+        define: {
+          'import.meta.url': 'import_meta.url',
+          'import.meta.dirname': 'import_meta.dirname',
+          'import.meta.filename': 'import_meta.filename',
+          'import.meta': 'import_meta',
+        },
+      });
+
+      return patchDynamicBuiltinImports(result.code);
+    } catch {
+      return code;
+    }
   }
 
   if (!window.__esbuild) {
@@ -100,13 +222,6 @@ export async function transformFile(
   if (!esbuild) {
     throw new Error('esbuild not initialized');
   }
-
-  // Determine loader based on file extension
-  let loader: 'js' | 'jsx' | 'ts' | 'tsx' = 'js';
-  if (filename.endsWith('.jsx')) loader = 'jsx';
-  else if (filename.endsWith('.ts')) loader = 'ts';
-  else if (filename.endsWith('.tsx')) loader = 'tsx';
-  else if (filename.endsWith('.mjs')) loader = 'js';
 
   try {
     const result = await esbuild.transform(code, {
@@ -126,26 +241,7 @@ export async function transformFile(
 
     let transformed = result.code;
 
-    // Convert dynamic import() of node: modules to require()
-    // This is necessary because the browser tries to fetch 'node:http' as a URL
-    // Pattern: import("node:xxx") or import('node:xxx') -> Promise.resolve(require("node:xxx"))
-    transformed = transformed.replace(
-      /\bimport\s*\(\s*["']node:([^"']+)["']\s*\)/g,
-      'Promise.resolve(require("node:$1"))'
-    );
-
-    // Also handle dynamic imports of bare node built-in modules (without node: prefix)
-    const nodeBuiltins = [
-      'assert', 'buffer', 'child_process', 'cluster', 'crypto', 'dgram', 'dns',
-      'events', 'fs', 'http', 'http2', 'https', 'net', 'os', 'path', 'perf_hooks',
-      'querystring', 'readline', 'stream', 'string_decoder', 'timers', 'tls',
-      'url', 'util', 'v8', 'vm', 'worker_threads', 'zlib', 'async_hooks', 'inspector', 'module'
-    ];
-    for (const builtin of nodeBuiltins) {
-      // Match import("fs") or import('fs') but not import("fs-extra") etc
-      const pattern = new RegExp(`\\bimport\\s*\\(\\s*["']${builtin}["']\\s*\\)`, 'g');
-      transformed = transformed.replace(pattern, `Promise.resolve(require("${builtin}"))`);
-    }
+    transformed = patchDynamicBuiltinImports(transformed);
 
     return transformed;
   } catch (error: unknown) {
@@ -167,6 +263,16 @@ export async function transformFile(
  * Check if a file needs ESM to CJS transformation
  */
 function needsTransform(filename: string, code: string): boolean {
+  // TypeScript files should always be transpiled.
+  if (
+    filename.endsWith('.ts') ||
+    filename.endsWith('.tsx') ||
+    filename.endsWith('.mts') ||
+    filename.endsWith('.cts')
+  ) {
+    return true;
+  }
+
   // .mjs files are always ESM
   if (filename.endsWith('.mjs')) {
     return true;
@@ -193,10 +299,14 @@ function hasDynamicNodeImports(code: string): boolean {
   if (/\bimport\s*\(\s*["']node:/.test(code)) {
     return true;
   }
-  // Check for dynamic imports of common node builtins
-  if (/\bimport\s*\(\s*["'](fs|path|http|https|net|url|util|events|stream|os|crypto)["']/.test(code)) {
-    return true;
+
+  for (const builtin of DYNAMIC_BUILTIN_MODULES) {
+    const pattern = new RegExp(`\\bimport\\s*\\(\\s*["']${escapeRegExp(builtin)}["']\\s*\\)`);
+    if (pattern.test(code)) {
+      return true;
+    }
   }
+
   return false;
 }
 
@@ -204,27 +314,7 @@ function hasDynamicNodeImports(code: string): boolean {
  * Patch dynamic imports in already-CJS code (e.g., pre-bundled packages)
  */
 function patchDynamicImports(code: string): string {
-  let patched = code;
-
-  // Convert dynamic import() of node: modules to require()
-  patched = patched.replace(
-    /\bimport\s*\(\s*["']node:([^"']+)["']\s*\)/g,
-    'Promise.resolve(require("node:$1"))'
-  );
-
-  // Also handle dynamic imports of bare node built-in modules
-  const nodeBuiltins = [
-    'assert', 'buffer', 'child_process', 'cluster', 'crypto', 'dgram', 'dns',
-    'events', 'fs', 'http', 'http2', 'https', 'net', 'os', 'path', 'perf_hooks',
-    'querystring', 'readline', 'stream', 'string_decoder', 'timers', 'tls',
-    'url', 'util', 'v8', 'vm', 'worker_threads', 'zlib', 'async_hooks', 'inspector', 'module'
-  ];
-  for (const builtin of nodeBuiltins) {
-    const pattern = new RegExp(`\\bimport\\s*\\(\\s*["']${builtin}["']\\s*\\)`, 'g');
-    patched = patched.replace(pattern, `Promise.resolve(require("${builtin}"))`);
-  }
-
-  return patched;
+  return patchDynamicBuiltinImports(code);
 }
 
 /**
@@ -297,7 +387,12 @@ function findJsFiles(vfs: VirtualFS, dir: string): string[] {
         } else if (
           entry.endsWith('.js') ||
           entry.endsWith('.mjs') ||
-          entry.endsWith('.jsx')
+          entry.endsWith('.cjs') ||
+          entry.endsWith('.jsx') ||
+          (entry.endsWith('.ts') && !entry.endsWith('.d.ts')) ||
+          entry.endsWith('.mts') ||
+          entry.endsWith('.cts') ||
+          entry.endsWith('.tsx')
         ) {
           files.push(fullPath);
         }

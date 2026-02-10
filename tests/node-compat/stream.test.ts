@@ -18,6 +18,7 @@ import Stream, {
   pipeline,
   finished,
 } from '../../src/shims/stream';
+import * as util from '../../src/shims/util';
 import { assert } from './common';
 
 describe('Stream module (Node.js compat)', () => {
@@ -38,6 +39,24 @@ describe('Stream module (Node.js compat)', () => {
     it('should have pipe method', () => {
       const stream = new Stream();
       expect(typeof stream.pipe).toBe('function');
+    });
+
+    it('should support legacy Stream.call(this) inheritance', () => {
+      function LegacyStream(this: any) {
+        (Stream as unknown as Function).call(this);
+      }
+
+      util.inherits(LegacyStream as unknown as Function, Stream as unknown as Function);
+
+      const legacy = new (LegacyStream as unknown as { new (): any })();
+      let emitted = false;
+      legacy.on('tick', () => {
+        emitted = true;
+      });
+      legacy.emit('tick');
+
+      expect(emitted).toBe(true);
+      expect(typeof legacy.pipe).toBe('function');
     });
   });
 

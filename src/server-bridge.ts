@@ -168,20 +168,32 @@ export class ServerBridge extends EventEmitter {
     }
 
     const swUrl = options?.swUrl ?? '/__sw__.js';
+    const serviceWorkerContainer = navigator.serviceWorker;
 
     // Set up controllerchange listener BEFORE registration so we don't miss the event.
     // clients.claim() in the SW's activate handler fires controllerchange, and it can
     // happen before our activation wait completes.
-    const controllerReady = navigator.serviceWorker.controller
+    const controllerReady = serviceWorkerContainer.controller
       ? Promise.resolve()
       : new Promise<void>((resolve) => {
-          navigator.serviceWorker.addEventListener('controllerchange', () => resolve(), { once: true });
+          serviceWorkerContainer.addEventListener('controllerchange', () => resolve(), { once: true });
         });
 
-    // Register service worker
-    const registration = await navigator.serviceWorker.register(swUrl, {
-      scope: '/',
-    });
+    const existingRegistration = await serviceWorkerContainer.getRegistration?.('/');
+    let registration: ServiceWorkerRegistration;
+
+    if (serviceWorkerContainer.controller && existingRegistration?.active) {
+      registration = existingRegistration;
+
+      // Attempt a background update but do not fail initialization if update fetch fails.
+      try {
+        await registration.update?.();
+      } catch {
+        // Ignore update failures; existing active controller can still serve requests.
+      }
+    } else {
+      registration = await this.registerServiceWorkerWithRecovery(swUrl);
+    }
 
     // Wait for service worker to be active
     const sw = registration.active || registration.waiting || registration.installing;
@@ -221,17 +233,17 @@ export class ServerBridge extends EventEmitter {
     // or when the SW is replaced (new deployment). The SW sends 'sw-needs-init'
     // to all clients when a request arrives but mainPort is null.
     const reinit = () => {
-      if (navigator.serviceWorker.controller) {
+      if (serviceWorkerContainer.controller) {
         this.messageChannel = new MessageChannel();
         this.messageChannel.port1.onmessage = this.handleServiceWorkerMessage.bind(this);
-        navigator.serviceWorker.controller.postMessage(
+        serviceWorkerContainer.controller.postMessage(
           { type: 'init', port: this.messageChannel.port2 },
           [this.messageChannel.port2]
         );
       }
     };
-    navigator.serviceWorker.addEventListener('controllerchange', reinit);
-    navigator.serviceWorker.addEventListener('message', (event) => {
+    serviceWorkerContainer.addEventListener('controllerchange', reinit);
+    serviceWorkerContainer.addEventListener('message', (event) => {
       if (event.data?.type === 'sw-needs-init') {
         reinit();
       }
@@ -245,6 +257,67 @@ export class ServerBridge extends EventEmitter {
 
     this.serviceWorkerReady = true;
     this.emit('sw-ready');
+  }
+
+  private async registerServiceWorkerWithRecovery(swUrl: string): Promise<ServiceWorkerRegistration> {
+    const scope = '/';
+
+    try {
+      return await navigator.serviceWorker.register(swUrl, { scope });
+    } catch (error) {
+      const firstErrorMessage = this.formatError(error);
+
+      await this.unregisterExistingServiceWorkers();
+
+      const separator = swUrl.includes('?') ? '&' : '?';
+      const retryUrl = `${swUrl}${separator}almostbun-sw-retry=${Date.now()}`;
+
+      try {
+        return await navigator.serviceWorker.register(retryUrl, { scope });
+      } catch (retryError) {
+        if (swUrl.startsWith('/__sw__.js')) {
+          const fallbackUrl = `/almostbun-sw.js?almostbun-sw-fallback=${Date.now()}`;
+          try {
+            return await navigator.serviceWorker.register(fallbackUrl, { scope });
+          } catch (fallbackError) {
+            const retryErrorMessage = this.formatError(retryError);
+            const fallbackErrorMessage = this.formatError(fallbackError);
+            throw new Error(
+              `Service Worker registration failed: ${firstErrorMessage}; ` +
+              `retry failed: ${retryErrorMessage}; fallback failed: ${fallbackErrorMessage}`
+            );
+          }
+        }
+
+        const retryErrorMessage = this.formatError(retryError);
+        throw new Error(
+          `Service Worker registration failed: ${firstErrorMessage}; retry failed: ${retryErrorMessage}`
+        );
+      }
+    }
+  }
+
+  private async unregisterExistingServiceWorkers(): Promise<void> {
+    const registrations = await navigator.serviceWorker.getRegistrations?.();
+    if (!registrations?.length) {
+      return;
+    }
+
+    await Promise.allSettled(registrations.map((registration) => registration.unregister()));
+  }
+
+  private formatError(error: unknown): string {
+    if (error instanceof Error && error.message) {
+      return error.message;
+    }
+    if (typeof error === 'string') {
+      return error;
+    }
+    try {
+      return JSON.stringify(error);
+    } catch {
+      return String(error);
+    }
   }
 
   /**
