@@ -51,6 +51,16 @@ export interface Process {
     headersUrl?: string;
     libUrl?: string;
   };
+  report: {
+    excludeNetwork: boolean;
+    getReport: () => {
+      header?: {
+        glibcVersionRuntime?: string;
+      };
+      sharedObjects?: string[];
+    };
+    writeReport: (fileName?: string | Error, err?: Error) => string;
+  };
   argv: string[];
   argv0: string;
   execPath: string;
@@ -84,8 +94,6 @@ export interface Process {
   eventNames: () => string[];
   setMaxListeners: (n: number) => Process;
   getMaxListeners: () => number;
-  // Internal debug counter
-  _cwdCallCount?: number;
 }
 
 // Helper to create a stream-like object with EventEmitter methods
@@ -194,22 +202,14 @@ export function createProcess(options?: {
     env,
 
     cwd() {
-      // Debug: Log cwd calls (limited to first 5)
-      if (!proc._cwdCallCount) proc._cwdCallCount = 0;
-      proc._cwdCallCount++;
-      if (proc._cwdCallCount <= 5 || proc._cwdCallCount % 100 === 0) {
-        console.log(`[process] cwd() called (${proc._cwdCallCount}x), returning:`, currentDir);
-      }
       return currentDir;
     },
 
     chdir(directory: string) {
-      console.log('[process] chdir called:', directory, 'from:', currentDir);
       if (!directory.startsWith('/')) {
         directory = currentDir + '/' + directory;
       }
       currentDir = directory;
-      console.log('[process] chdir result:', currentDir);
     },
 
     platform: 'linux', // Pretend to be linux for better compatibility
@@ -221,6 +221,24 @@ export function createProcess(options?: {
       lts: 'Iron',
       sourceUrl: 'https://nodejs.org/dist/v20.0.0/node-v20.0.0.tar.gz',
       headersUrl: 'https://nodejs.org/dist/v20.0.0/node-v20.0.0-headers.tar.gz',
+    },
+    report: {
+      excludeNetwork: true,
+      getReport() {
+        return {
+          header: {
+            // Pretend to be glibc so native loaders that probe musl can fallback deterministically.
+            glibcVersionRuntime: '2.31',
+          },
+          sharedObjects: [],
+        };
+      },
+      writeReport(fileName?: string | Error, _err?: Error): string {
+        if (typeof fileName === 'string' && fileName.length > 0) {
+          return fileName;
+        }
+        return 'report.json';
+      },
     },
 
     argv,

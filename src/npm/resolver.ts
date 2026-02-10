@@ -338,7 +338,7 @@ export async function resolveDependencies(
     options,
   };
 
-  await resolvePackage(packageName, versionRange, context);
+  await resolvePackage(packageName, versionRange, context, true);
 
   return context.resolved;
 }
@@ -368,7 +368,7 @@ export async function resolveFromPackageJson(
   }
 
   for (const [name, range] of Object.entries(deps)) {
-    await resolvePackage(name, range, context);
+    await resolvePackage(name, range, context, true);
   }
 
   return context.resolved;
@@ -380,7 +380,8 @@ export async function resolveFromPackageJson(
 async function resolvePackage(
   packageName: string,
   versionRange: string,
-  context: ResolveContext
+  context: ResolveContext,
+  isRootDependency: boolean = false
 ): Promise<void> {
   const { registry, resolved, resolving, options } = context;
 
@@ -398,9 +399,16 @@ async function resolvePackage(
     if (satisfies(existing.version, versionRange)) {
       return;
     }
-    // If existing version doesn't satisfy, we might need nested deps
-    // For MVP, we'll just use the existing version (flat node_modules)
-    return;
+    // Let explicit root dependencies override previously resolved transitive versions.
+    if (isRootDependency) {
+      options.onProgress?.(
+        `Overriding ${packageName}@${existing.version} with root requirement ${versionRange}`
+      );
+      resolved.delete(packageName);
+    } else {
+      // Flat node_modules fallback for transitive conflicts.
+      return;
+    }
   }
 
   resolving.add(key);
@@ -410,7 +418,7 @@ async function resolvePackage(
 
     const alias = parseNpmAliasSpec(versionRange);
     if (alias) {
-      await resolvePackage(alias.targetName, alias.targetRange, context);
+      await resolvePackage(alias.targetName, alias.targetRange, context, isRootDependency);
       const targetResolved = resolved.get(alias.targetName);
       if (!targetResolved) {
         throw new Error(
@@ -483,7 +491,7 @@ async function resolvePackage(
       for (let i = 0; i < depEntries.length; i += CONCURRENCY) {
         const batch = depEntries.slice(i, i + CONCURRENCY);
         await Promise.all(
-          batch.map(([depName, depRange]) => resolvePackage(depName, depRange, context))
+          batch.map(([depName, depRange]) => resolvePackage(depName, depRange, context, false))
         );
       }
     }

@@ -470,6 +470,25 @@ function createRequire(
       if (stats.isFile()) {
         return basePath;
       }
+      // Directory - honor package.json entry points first.
+      const pkgJsonPath = pathShim.join(basePath, 'package.json');
+      if (vfs.existsSync(pkgJsonPath)) {
+        const pkg = getParsedPackageJson(pkgJsonPath);
+        if (pkg) {
+          const entryCandidates = [pkg.main, pkg.module]
+            .filter((entry): entry is string => typeof entry === 'string' && entry.length > 0);
+          for (const entry of entryCandidates) {
+            const entryPath = entry.startsWith('/')
+              ? entry
+              : pathShim.resolve(basePath, entry);
+            const resolvedEntry = tryResolveFile(entryPath);
+            if (resolvedEntry) {
+              return resolvedEntry;
+            }
+          }
+        }
+      }
+
       // Directory - look for index files
       for (const ext of moduleExtensions) {
         const indexPath = pathShim.join(basePath, `index${ext}`);
@@ -934,6 +953,11 @@ function createRequire(
       return module;
     }
 
+    // Native Node addons cannot execute in browser runtime.
+    if (resolvedPath.endsWith('.node')) {
+      throw new Error(`Native addons are not supported in this runtime: ${resolvedPath}`);
+    }
+
     // Read and execute JS file
     const rawCode = vfs.readFileSync(resolvedPath, 'utf8');
     // Node-style executables often start with a shebang line (#!/usr/bin/env node).
@@ -1032,6 +1056,16 @@ ${code}
       }
       // Create dynamic import function for this module context
       const dynamicImport = createDynamicImport(moduleRequire);
+      (globalThis as typeof globalThis & {
+        __almostbunDynamicImport?: (specifier: string) => Promise<unknown>;
+      }).__almostbunDynamicImport = dynamicImport;
+      try {
+        // Ensure generated/eval'd code that references __dynamicImport as a free
+        // identifier can resolve it from global scope.
+        (0, eval)('var __dynamicImport = globalThis.__almostbunDynamicImport;');
+      } catch {
+        // Best-effort; local wrapper still provides __dynamicImport.
+      }
 
       fn(
         module.exports,
@@ -1059,11 +1093,125 @@ ${code}
     return module;
   };
 
+  let swcCoreShimCache: Record<string, unknown> | null = null;
+  const getSwcCoreShim = (): Record<string, unknown> => {
+    if (swcCoreShimCache) {
+      return swcCoreShimCache;
+    }
+
+    const transpileSync = (
+      input: string,
+      options?: {
+        filename?: string;
+        sourceMaps?: boolean;
+        jsc?: {
+          parser?: {
+            syntax?: string;
+            jsx?: boolean;
+            tsx?: boolean;
+          };
+        };
+      }
+    ): { code: string; map: string } => {
+      try {
+        const ts = require('typescript') as {
+          transpileModule?: (
+            code: string,
+            options: {
+              fileName?: string;
+              reportDiagnostics?: boolean;
+              compilerOptions?: Record<string, unknown>;
+            }
+          ) => { outputText?: string; sourceMapText?: string };
+          ModuleKind?: { CommonJS?: number };
+          ScriptTarget?: { ES2020?: number };
+          JsxEmit?: { ReactJSX?: number; Preserve?: number };
+        };
+        if (typeof ts?.transpileModule === 'function') {
+          const parser = options?.jsc?.parser;
+          const usesJsx = !!(parser?.jsx || parser?.tsx);
+          const output = ts.transpileModule(input, {
+            fileName: options?.filename,
+            reportDiagnostics: false,
+            compilerOptions: {
+              module: ts.ModuleKind?.CommonJS,
+              target: ts.ScriptTarget?.ES2020,
+              sourceMap: !!options?.sourceMaps,
+              jsx: usesJsx ? ts.JsxEmit?.ReactJSX : ts.JsxEmit?.Preserve,
+            },
+          });
+          return {
+            code: output.outputText || input,
+            map: output.sourceMapText || '',
+          };
+        }
+      } catch {
+        // Fallback to passthrough below.
+      }
+      return {
+        code: input,
+        map: '',
+      };
+    };
+
+    class Compiler {
+      transformSync(code: string, options?: unknown) {
+        return transpileSync(code, options as Parameters<typeof transpileSync>[1]);
+      }
+      async transform(code: string, options?: unknown) {
+        return this.transformSync(code, options);
+      }
+      minifySync(code: string) {
+        return { code, map: '' };
+      }
+      async minify(code: string) {
+        return this.minifySync(code);
+      }
+      parseSync() {
+        return { type: 'Program', body: [] as unknown[] };
+      }
+      async parse() {
+        return this.parseSync();
+      }
+      printSync(program: unknown) {
+        if (typeof program === 'string') {
+          return { code: program, map: '' };
+        }
+        return { code: '', map: '' };
+      }
+      async print(program: unknown) {
+        return this.printSync(program);
+      }
+      async bundle() {
+        return {};
+      }
+    }
+
+    const compiler = new Compiler();
+    swcCoreShimCache = {
+      version: '0.0.0-almostbun',
+      Compiler,
+      transformSync: compiler.transformSync.bind(compiler),
+      transform: compiler.transform.bind(compiler),
+      minifySync: compiler.minifySync.bind(compiler),
+      minify: compiler.minify.bind(compiler),
+      parseSync: compiler.parseSync.bind(compiler),
+      parse: compiler.parse.bind(compiler),
+      printSync: compiler.printSync.bind(compiler),
+      print: compiler.print.bind(compiler),
+      bundle: compiler.bundle.bind(compiler),
+    };
+    return swcCoreShimCache;
+  };
+
   const require: RequireFunction = (id: string): unknown => {
     // Handle node: protocol prefix (Node.js 16+)
     if (id.startsWith('node:')) {
       id = id.slice(5);
     }
+    // Some packages request built-ins with a trailing slash (e.g. "string_decoder/").
+    // Normalize this to the canonical module id.
+    id = id.replace(/\/+$/, '');
 
     if (id === 'bun') {
       return bun;
@@ -1083,37 +1231,60 @@ ${code}
     if (id === 'process') {
       return process;
     }
-    // Special handling for 'module' - provide a working createRequire
+    if (id === '@swc/core' || id === '@swc/core-wasm32-wasi' || id.startsWith('@swc/core/')) {
+      return getSwcCoreShim();
+    }
+    // Special handling for 'module' - provide a constructor-compatible export
+    // with a runtime-bound createRequire implementation.
     if (id === 'module') {
-      return {
-        ...moduleShim,
-        createRequire: (filenameOrUrl: string) => {
-          // Convert file:// URL to path
-          let fromPath = filenameOrUrl;
-          if (filenameOrUrl.startsWith('file://')) {
-            fromPath = filenameOrUrl.slice(7); // Remove 'file://'
-            // Handle Windows-style file:///C:/ URLs (though unlikely in our env)
-            if (fromPath.startsWith('/') && fromPath[2] === ':') {
-              fromPath = fromPath.slice(1);
-            }
-          }
-          // Get directory from the path
-          const fromDir = pathShim.dirname(fromPath);
-          // Return a require function that resolves from this directory
-          const newRequire = createRequire(
-            vfs,
-            fsShim,
-            process,
-            fromDir,
-            moduleCache,
-            options,
-            undefined,
-            bun
-          );
-          newRequire.cache = moduleCache;
-          return newRequire;
-        },
+      class RuntimeModule extends moduleShim.Module {}
+      type RuntimeModuleCtor = typeof RuntimeModule & {
+        Module: typeof RuntimeModule;
+        createRequire: (filenameOrUrl: string) => RequireFunction;
+        builtinModules: string[];
+        isBuiltin: (moduleName: string) => boolean;
+        _cache: Record<string, Module>;
+        _extensions: Record<string, unknown>;
+        _pathCache: Record<string, string>;
+        syncBuiltinESMExports: () => void;
       };
+
+      const runtimeModule = RuntimeModule as RuntimeModuleCtor;
+      runtimeModule.Module = RuntimeModule;
+      runtimeModule.builtinModules = moduleShim.builtinModules;
+      runtimeModule.isBuiltin = moduleShim.isBuiltin;
+      runtimeModule._cache = moduleCache;
+      runtimeModule._extensions = moduleShim._extensions;
+      runtimeModule._pathCache = moduleShim._pathCache;
+      runtimeModule.syncBuiltinESMExports = moduleShim.syncBuiltinESMExports;
+      runtimeModule.createRequire = (filenameOrUrl: string): RequireFunction => {
+        // Convert file:// URL to path
+        let fromPath = filenameOrUrl;
+        if (filenameOrUrl.startsWith('file://')) {
+          fromPath = filenameOrUrl.slice(7); // Remove 'file://'
+          // Handle Windows-style file:///C:/ URLs (though unlikely in our env)
+          if (fromPath.startsWith('/') && fromPath[2] === ':') {
+            fromPath = fromPath.slice(1);
+          }
+        }
+        // Get directory from the path
+        const fromDir = pathShim.dirname(fromPath);
+        // Return a require function that resolves from this directory
+        const newRequire = createRequire(
+          vfs,
+          fsShim,
+          process,
+          fromDir,
+          moduleCache,
+          options,
+          undefined,
+          bun
+        );
+        newRequire.cache = moduleCache;
+        return newRequire;
+      };
+
+      return runtimeModule;
     }
     if (builtinModules[id]) {
       return builtinModules[id];
@@ -1160,8 +1331,33 @@ ${code}
     if (resolved.includes('/node_modules/@sentry/')) {
       return builtinModules['@sentry/node'];
     }
+    if (resolved.includes('/node_modules/@swc/core/')) {
+      return getSwcCoreShim();
+    }
 
-    return loadModule(resolved).exports;
+    const loadedExports = loadModule(resolved).exports as any;
+
+    // CommonJS/ESM interop edge case:
+    // Some packages expect require('lru-cache').LRUCache even when the package
+    // exports the constructor directly as module.exports.
+    if (
+      id === 'lru-cache' ||
+      /\/node_modules\/lru-cache\//.test(resolved)
+    ) {
+      if (typeof loadedExports === 'function') {
+        if (!loadedExports.LRUCache) {
+          loadedExports.LRUCache = loadedExports;
+        }
+        return loadedExports;
+      }
+      if (loadedExports && typeof loadedExports === 'object') {
+        if (!loadedExports.LRUCache && typeof loadedExports.default === 'function') {
+          loadedExports.LRUCache = loadedExports.default;
+        }
+      }
+    }
+
+    return loadedExports;
   };
 
   require.resolve = (id: string): string => {
@@ -1581,7 +1777,7 @@ export class Runtime {
     // Use the same wrapper pattern as loadModule for consistency
     try {
       const importMetaUrl = 'file://' + filename;
-      const wrappedCode = `(function($exports, $require, $module, $filename, $dirname, $process, $console, $importMeta, $bun) {
+      const wrappedCode = `(function($exports, $require, $module, $filename, $dirname, $process, $console, $importMeta, $dynamicImport, $bun) {
 var exports = $exports;
 var require = $require;
 var module = $module;
@@ -1590,6 +1786,7 @@ var __dirname = $dirname;
 var process = $process;
 var console = $console;
 var import_meta = $importMeta;
+var __dynamicImport = $dynamicImport;
 var Bun = $bun;
 // Set up global.process and globalThis.process for code that accesses them directly
 var global = globalThis;
@@ -1604,6 +1801,15 @@ ${code}
 })`;
 
       const fn = eval(wrappedCode);
+      const dynamicImport = createDynamicImport(require);
+      (globalThis as typeof globalThis & {
+        __almostbunDynamicImport?: (specifier: string) => Promise<unknown>;
+      }).__almostbunDynamicImport = dynamicImport;
+      try {
+        (0, eval)('var __dynamicImport = globalThis.__almostbunDynamicImport;');
+      } catch {
+        // Best-effort; local wrapper still provides __dynamicImport.
+      }
       fn(
         module.exports,
         require,
@@ -1613,6 +1819,7 @@ ${code}
         this.process,
         consoleWrapper,
         { url: importMetaUrl, dirname, filename },
+        dynamicImport,
         this.bunModule
       );
 

@@ -2,6 +2,23 @@
  * vm shim - Basic VM functionality using eval
  */
 
+function evalWithRuntimeScope(code: string): unknown {
+  const dynamicImport = (globalThis as typeof globalThis & {
+    __almostbunDynamicImport?: (specifier: string) => Promise<unknown>;
+  }).__almostbunDynamicImport;
+
+  if (typeof dynamicImport !== 'function') {
+    return eval(code);
+  }
+
+  // Some tooling (e.g. jiti-generated wrappers) expects __dynamicImport
+  // as a free variable in the VM context.
+  return (function scopedEval(source: string) {
+    const __dynamicImport = dynamicImport;
+    return eval(source);
+  })(code);
+}
+
 export class Script {
   private code: string;
 
@@ -10,7 +27,7 @@ export class Script {
   }
 
   runInThisContext(_options?: object): unknown {
-    return eval(this.code);
+    return evalWithRuntimeScope(this.code);
   }
 
   runInNewContext(contextObject?: object, _options?: object): unknown {
@@ -38,7 +55,7 @@ export function isContext(_sandbox: object): boolean {
 }
 
 export function runInThisContext(code: string, _options?: object): unknown {
-  return eval(code);
+  return evalWithRuntimeScope(code);
 }
 
 export function runInNewContext(code: string, contextObject?: object, _options?: object): unknown {

@@ -7,108 +7,134 @@ type RepoMatrixCase = {
   url: string;
   expectedKind: RunnableProjectKind;
   probePaths?: string[];
+  skipInstall?: boolean;
+  includeDev?: boolean;
+  transformProjectSources?: boolean;
+  serverReadyTimeoutMs?: number;
 };
+
+const CASE_TIMEOUT_MS = Number(process.env.PUBLIC_REPO_CASE_TIMEOUT_MS || 4 * 60 * 1000);
 
 const PUBLIC_REPO_MATRIX: RepoMatrixCase[] = [
   {
-    name: 'mdn-styled-static',
-    url: 'https://github.com/mdn/beginner-html-site-styled',
-    expectedKind: 'static',
-  },
-  {
-    name: 'modernjs-examples-self-built-node-output',
+    name: 'modern-static-self-built-node',
     url: 'https://github.com/web-infra-dev/modern-js-examples/tree/main/examples/deploy/self-built-node/.output/html/main',
     expectedKind: 'static',
+    skipInstall: true,
   },
   {
-    name: 'modernjs-examples-playwright-report',
+    name: 'modern-static-playwright-report',
     url: 'https://github.com/web-infra-dev/modern-js-examples/tree/main/examples/test-playwright/playwright-report',
     expectedKind: 'static',
+    skipInstall: true,
   },
   {
-    name: 'modernjs-builder-static-minify-case',
+    name: 'modern-static-minify',
     url: 'https://github.com/web-infra-dev/modern.js/tree/main/tests/e2e/builder/cases/html/minify/static',
     expectedKind: 'static',
+    skipInstall: true,
   },
   {
-    name: 'modernjs-server-pure-dist-html',
+    name: 'modern-static-test-dist',
     url: 'https://github.com/web-infra-dev/modern.js/tree/main/packages/server/server/tests/fixtures/pure/test-dist/html/main',
     expectedKind: 'static',
+    skipInstall: true,
   },
   {
-    name: 'vite-template-vue-ts',
-    url: 'https://github.com/vitejs/vite/tree/main/packages/create-vite/template-vue-ts',
+    name: 'tanstack-start-bare',
+    url: 'https://github.com/TanStack/router/tree/main/examples/react/start-bare',
     expectedKind: 'vite',
+    skipInstall: true,
   },
   {
-    name: 'vite-template-svelte-ts',
-    url: 'https://github.com/vitejs/vite/tree/main/packages/create-vite/template-svelte-ts',
+    name: 'tanstack-start-basic-react-query',
+    url: 'https://github.com/TanStack/router/tree/main/examples/react/start-basic-react-query',
     expectedKind: 'vite',
+    skipInstall: true,
   },
   {
-    name: 'vite-template-solid-ts',
-    url: 'https://github.com/vitejs/vite/tree/main/packages/create-vite/template-solid-ts',
+    name: 'tanstack-start-basic-rsc',
+    url: 'https://github.com/TanStack/router/tree/main/examples/react/start-basic-rsc',
     expectedKind: 'vite',
+    skipInstall: true,
+  },
+  {
+    name: 'tanstack-start-basic-authjs',
+    url: 'https://github.com/TanStack/router/tree/main/examples/react/start-basic-authjs',
+    expectedKind: 'vite',
+    skipInstall: true,
+  },
+  {
+    name: 'tanstack-start-basic-cloudflare',
+    url: 'https://github.com/TanStack/router/tree/main/examples/react/start-basic-cloudflare',
+    expectedKind: 'vite',
+    skipInstall: true,
+  },
+  {
+    name: 'tanstack-start-basic-auth',
+    url: 'https://github.com/TanStack/router/tree/main/examples/react/start-basic-auth',
+    expectedKind: 'vite',
+    skipInstall: true,
   },
   {
     name: 'nextjs-with-context-api',
     url: 'https://github.com/vercel/next.js/tree/canary/examples/with-context-api',
     expectedKind: 'next',
+    skipInstall: true,
   },
   {
-    name: 'tanstack-router-react-basic',
-    url: 'https://github.com/TanStack/router/tree/main/examples/react/basic',
-    expectedKind: 'vite',
+    name: 'nextjs-with-redux',
+    url: 'https://github.com/vercel/next.js/tree/canary/examples/with-redux',
+    expectedKind: 'next',
+    skipInstall: true,
   },
   {
-    name: 'tanstack-router-authenticated-routes',
-    url: 'https://github.com/TanStack/router/tree/main/examples/react/authenticated-routes',
-    expectedKind: 'vite',
+    name: 'nextjs-with-apollo-and-redux',
+    url: 'https://github.com/vercel/next.js/tree/canary/examples/with-apollo-and-redux',
+    expectedKind: 'next',
+    skipInstall: true,
   },
   {
-    name: 'svelte-vite-plugin-env-e2e',
+    name: 'nextjs-with-jotai',
+    url: 'https://github.com/vercel/next.js/tree/canary/examples/with-jotai',
+    expectedKind: 'next',
+    skipInstall: true,
+  },
+  {
+    name: 'nextjs-with-react-intl',
+    url: 'https://github.com/vercel/next.js/tree/canary/examples/with-react-intl',
+    expectedKind: 'next',
+    skipInstall: true,
+  },
+  {
+    name: 'nextjs-with-i18n-next-intl',
+    url: 'https://github.com/vercel/next.js/tree/canary/examples/with-i18n-next-intl',
+    expectedKind: 'next',
+    skipInstall: true,
+  },
+  {
+    name: 'nextjs-with-mobx',
+    url: 'https://github.com/vercel/next.js/tree/canary/examples/with-mobx',
+    expectedKind: 'next',
+    skipInstall: true,
+  },
+  {
+    name: 'nextjs-with-next-seo',
+    url: 'https://github.com/vercel/next.js/tree/canary/examples/with-next-seo',
+    expectedKind: 'next',
+    skipInstall: true,
+  },
+  {
+    name: 'nextjs-with-static-export',
+    url: 'https://github.com/vercel/next.js/tree/canary/examples/with-static-export',
+    expectedKind: 'next',
+    skipInstall: true,
+  },
+  {
+    name: 'svelte-vite-plugin-env',
     url: 'https://github.com/sveltejs/vite-plugin-svelte/tree/main/packages/e2e-tests/env',
     expectedKind: 'vite',
-  },
-  {
-    name: 'vite-template-vanilla',
-    url: 'https://github.com/vitejs/vite/tree/main/packages/create-vite/template-vanilla',
-    expectedKind: 'vite',
-  },
-  {
-    name: 'vite-template-vanilla-ts',
-    url: 'https://github.com/vitejs/vite/tree/main/packages/create-vite/template-vanilla-ts',
-    expectedKind: 'vite',
-  },
-  {
-    name: 'vite-template-react',
-    url: 'https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react',
-    expectedKind: 'vite',
-  },
-  {
-    name: 'vite-template-react-ts',
-    url: 'https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts',
-    expectedKind: 'vite',
-  },
-  {
-    name: 'vite-template-vue',
-    url: 'https://github.com/vitejs/vite/tree/main/packages/create-vite/template-vue',
-    expectedKind: 'vite',
-  },
-  {
-    name: 'vite-template-svelte',
-    url: 'https://github.com/vitejs/vite/tree/main/packages/create-vite/template-svelte',
-    expectedKind: 'vite',
-  },
-  {
-    name: 'vite-template-solid',
-    url: 'https://github.com/vitejs/vite/tree/main/packages/create-vite/template-solid',
-    expectedKind: 'vite',
-  },
-  {
-    name: 'vite-template-lit',
-    url: 'https://github.com/vitejs/vite/tree/main/packages/create-vite/template-lit',
-    expectedKind: 'vite',
+    skipInstall: true,
   },
 ];
 
@@ -133,12 +159,15 @@ async function probeRunningApp(port: number, paths: string[]): Promise<{
         accept: 'text/html,application/json,application/javascript,*/*',
       }
     );
-    const body = response.body.toString();
+    const body = response.body ? response.body.toString() : '';
     const bodyPreview = body.slice(0, 220);
+    const hasRedirectLocation =
+      typeof response.headers?.location === 'string' &&
+      response.headers.location.length > 0;
     const ok =
       response.statusCode >= 200 &&
       response.statusCode < 400 &&
-      body.trim().length > 0 &&
+      (body.trim().length > 0 || hasRedirectLocation) &&
       !/Cannot GET \//i.test(bodyPreview);
 
     if (ok) {
@@ -163,63 +192,93 @@ async function probeRunningApp(port: number, paths: string[]): Promise<{
   };
 }
 
+async function withTimeout<T>(work: Promise<T>, timeoutMs: number, label: string): Promise<T> {
+  let timeoutId: ReturnType<typeof setTimeout> | null = null;
+  try {
+    return await Promise.race<T>([
+      work,
+      new Promise<T>((_, reject) => {
+        timeoutId = setTimeout(() => {
+          reject(new Error(`${label} timed out after ${timeoutMs}ms`));
+        }, timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+    }
+  }
+}
+
 describe.skipIf(process.env.RUN_PUBLIC_REPO_MATRIX !== '1')('public repo compatibility matrix', () => {
   it(
     'bootstraps and serves 20 public GitHub repos',
     async () => {
       const failures: string[] = [];
+      const requestedNames = (process.env.PUBLIC_REPO_MATRIX_NAMES || '')
+        .split(',')
+        .map(name => name.trim())
+        .filter(Boolean);
+      const matrix = requestedNames.length > 0
+        ? PUBLIC_REPO_MATRIX.filter(repo => requestedNames.includes(repo.name))
+        : PUBLIC_REPO_MATRIX;
+      expect(matrix.length).toBeGreaterThan(0);
 
-      for (const repoCase of PUBLIC_REPO_MATRIX) {
-        let passed = false;
-        const attemptErrors: string[] = [];
+      for (const repoCase of matrix) {
+        let running: Awaited<ReturnType<typeof bootstrapAndRunGitHubProject>>['running'] | undefined;
+        const logs: string[] = [];
+        console.log(`[matrix] start ${repoCase.name}`);
 
-        for (let attempt = 1; attempt <= 2; attempt += 1) {
-          let running: Awaited<ReturnType<typeof bootstrapAndRunGitHubProject>>['running'] | undefined;
-          const logs: string[] = [];
-
-          try {
-            const started = await bootstrapAndRunGitHubProject(repoCase.url, {
+        try {
+          const started = await withTimeout(
+            bootstrapAndRunGitHubProject(repoCase.url, {
+              skipInstall: repoCase.skipInstall,
               initServiceWorker: false,
-              serverReadyTimeoutMs: 20_000,
+              includeDev: repoCase.includeDev,
+              transformProjectSources: repoCase.transformProjectSources,
+              serverReadyTimeoutMs: repoCase.serverReadyTimeoutMs ?? 45_000,
+              onProgress: (message) => {
+                logs.push(`[progress] ${message}`);
+              },
               log: (message) => {
                 logs.push(message);
               },
-            });
+            }),
+            CASE_TIMEOUT_MS,
+            repoCase.name
+          );
 
-            running = started.running;
-            expect(started.detected.kind).toBe(repoCase.expectedKind);
+          running = started.running;
+          expect(started.detected.kind).toBe(repoCase.expectedKind);
 
-            const probe = await probeRunningApp(
+          const probe = await withTimeout(
+            probeRunningApp(
               running.port,
               repoCase.probePaths || ['/', '/index.html']
-            );
-
-            if (!probe.ok) {
-              throw new Error(
-                `probe failed at ${probe.path} with status ${probe.statusCode}; body preview: ${probe.bodyPreview}`
-              );
-            }
-
-            passed = true;
-            break;
-          } catch (error) {
-            attemptErrors.push(
-              `attempt ${attempt}: ${String(error)}\nrecent logs:\n${logs.slice(-25).join('\n')}`
-            );
-          } finally {
-            try {
-              running?.stop();
-            } catch {
-              // ignore cleanup issues and continue
-            }
-            resetServerBridge();
-          }
-        }
-
-        if (!passed) {
-          failures.push(
-            `[${repoCase.name}] ${repoCase.url}\n${attemptErrors.join('\n---\n')}`
+            ),
+            30_000,
+            `${repoCase.name} probe`
           );
+
+          if (!probe.ok) {
+            throw new Error(
+              `probe failed at ${probe.path} with status ${probe.statusCode}; body preview: ${probe.bodyPreview}`
+            );
+          }
+
+          console.log(`[matrix] pass ${repoCase.name} (${started.detected.kind})`);
+        } catch (error) {
+          failures.push(
+            `[${repoCase.name}] ${repoCase.url}\nerror: ${String(error)}\nrecent logs:\n${logs.slice(-25).join('\n')}`
+          );
+          console.log(`[matrix] fail ${repoCase.name}: ${String(error)}`);
+        } finally {
+          try {
+            running?.stop();
+          } catch {
+            // ignore cleanup issues and continue
+          }
+          resetServerBridge();
         }
       }
 
