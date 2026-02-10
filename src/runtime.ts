@@ -1600,6 +1600,42 @@ ${code}
       }
     }
 
+    // Compatibility for etag-like modules:
+    // some frameworks pass Uint8Array / ArrayBuffer, while etag expects
+    // Node Buffer|string|fs.Stats.
+    if (
+      (id === 'etag' || /\/node_modules\/etag\//.test(resolved)) &&
+      typeof loadedExports === 'function'
+    ) {
+      const etagImpl = loadedExports as ((entity: unknown, options?: unknown) => unknown) & Record<string, unknown>;
+      const wrapped = ((entity: unknown, options?: unknown) => {
+        let normalized = entity;
+        if (entity instanceof ArrayBuffer) {
+          normalized = Buffer.from(entity);
+        } else if (ArrayBuffer.isView(entity)) {
+          normalized = Buffer.from(entity as ArrayBufferView as Uint8Array);
+        }
+        return etagImpl(normalized, options);
+      }) as typeof etagImpl;
+
+      for (const prop of Object.getOwnPropertyNames(etagImpl)) {
+        if (prop === 'length' || prop === 'name' || prop === 'prototype') {
+          continue;
+        }
+        const descriptor = Object.getOwnPropertyDescriptor(etagImpl, prop);
+        if (!descriptor) {
+          continue;
+        }
+        try {
+          Object.defineProperty(wrapped, prop, descriptor);
+        } catch {
+          // Ignore non-configurable properties.
+        }
+      }
+
+      loadedExports = wrapped;
+    }
+
     // Legacy EventEmitter compatibility:
     // older stacks use util.inherits + EventEmitter.call(this), which fails
     // when EventEmitter is class-only.

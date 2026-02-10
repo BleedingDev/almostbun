@@ -136,6 +136,19 @@ const PUBLIC_REPO_MATRIX: RepoMatrixCase[] = [
     expectedKind: 'vite',
     skipInstall: true,
   },
+  {
+    name: 'garfish-app-esm-http-server',
+    url: 'https://github.com/web-infra-dev/garfish/tree/main/dev/app-esm',
+    expectedKind: 'node-script',
+    includeDev: true,
+    probePaths: ['/index.html', '/'],
+  },
+  {
+    name: 'heroku-node-getting-started',
+    url: 'https://github.com/heroku/node-js-getting-started',
+    expectedKind: 'node-script',
+    probePaths: ['/'],
+  },
 ];
 
 async function probeRunningApp(port: number, paths: string[]): Promise<{
@@ -212,7 +225,7 @@ async function withTimeout<T>(work: Promise<T>, timeoutMs: number, label: string
 
 describe.skipIf(process.env.RUN_PUBLIC_REPO_MATRIX !== '1')('public repo compatibility matrix', () => {
   it(
-    'bootstraps and serves 20 public GitHub repos',
+    'bootstraps and serves public GitHub repos',
     async () => {
       const failures: string[] = [];
       const requestedNames = (process.env.PUBLIC_REPO_MATRIX_NAMES || '')
@@ -222,7 +235,7 @@ describe.skipIf(process.env.RUN_PUBLIC_REPO_MATRIX !== '1')('public repo compati
       const matrix = requestedNames.length > 0
         ? PUBLIC_REPO_MATRIX.filter(repo => requestedNames.includes(repo.name))
         : PUBLIC_REPO_MATRIX;
-      expect(matrix.length).toBeGreaterThan(0);
+      expect(matrix.length).toBeGreaterThanOrEqual(20);
 
       for (const repoCase of matrix) {
         let running: Awaited<ReturnType<typeof bootstrapAndRunGitHubProject>>['running'] | undefined;

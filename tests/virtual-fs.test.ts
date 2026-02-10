@@ -283,5 +283,44 @@ describe('VirtualFS', () => {
       expect(combined).toBe('pipe works');
       expect(endCalled).toBe(true);
     });
+
+    it('createReadStream supports once(open) before piping', async () => {
+      vfs.writeFileSync('/open-pipe.txt', 'open then pipe');
+
+      const written: Uint8Array[] = [];
+      let endCalled = false;
+      let pipeNotified = false;
+
+      await new Promise<void>((resolve, reject) => {
+        const destination = {
+          write(chunk: Uint8Array) {
+            written.push(chunk);
+          },
+          end() {
+            endCalled = true;
+            resolve();
+          },
+          emit(event: string, payload: unknown) {
+            if (event === 'pipe') {
+              pipeNotified = true;
+            }
+            if (event === 'error') {
+              reject(payload);
+            }
+          },
+        };
+
+        const stream = vfs.createReadStream('/open-pipe.txt');
+        stream.once('open', () => {
+          stream.pipe(destination);
+        });
+        stream.on('error', reject);
+      });
+
+      const combined = Buffer.concat(written.map(chunk => Buffer.from(chunk))).toString('utf8');
+      expect(combined).toBe('open then pipe');
+      expect(endCalled).toBe(true);
+      expect(pipeNotified).toBe(true);
+    });
   });
 });

@@ -823,17 +823,31 @@ export class VirtualFS {
    */
   createReadStream(path: string): {
     on: (event: string, cb: (...args: unknown[]) => void) => void;
+    once: (event: string, cb: (...args: unknown[]) => void) => void;
     pipe: (dest: unknown) => unknown;
+    pause: () => unknown;
+    resume: () => unknown;
+    destroy: (error?: unknown) => unknown;
+    emit: (event: string, ...args: unknown[]) => void;
   } {
     const self = this;
     const listeners: Record<string, ((...args: unknown[]) => void)[]> = {};
     let started = false;
     let cachedData: Uint8Array | null = null;
     let cachedError: unknown = null;
+    let opened = false;
     let ended = false;
+    let closed = false;
+    let paused = false;
+    let delivered = false;
 
     const emit = (event: string, ...args: unknown[]): void => {
-      listeners[event]?.forEach((cb) => cb(...args));
+      const callbacks = listeners[event];
+      if (!callbacks || callbacks.length === 0) {
+        return;
+      }
+      // Snapshot listeners so handlers can safely add/remove listeners during emit.
+      [...callbacks].forEach((cb) => cb(...args));
     };
 
     const writeToDest = (dest: unknown, data: Uint8Array): void => {
@@ -866,30 +880,64 @@ export class VirtualFS {
       }
     };
 
+    const flush = (): void => {
+      if (closed || paused || delivered || !cachedData) {
+        return;
+      }
+
+      delivered = true;
+      emit('data', cachedData);
+      for (const target of pipeTargets) {
+        writeToDest(target, cachedData);
+      }
+
+      ended = true;
+      emit('end');
+      for (const target of pipeTargets) {
+        endDest(target);
+      }
+
+      if (!closed) {
+        closed = true;
+        emit('close');
+      }
+    };
+
+    const removeListener = (event: string, cb: (...args: unknown[]) => void): void => {
+      const eventListeners = listeners[event];
+      if (!eventListeners) {
+        return;
+      }
+      const index = eventListeners.indexOf(cb);
+      if (index >= 0) {
+        eventListeners.splice(index, 1);
+      }
+    };
+
     const pipeTargets: unknown[] = [];
     const start = (): void => {
       if (started) return;
       started = true;
 
-      // Emit data asynchronously
+      // Emit stream events asynchronously to mirror Node stream behavior.
       setTimeout(() => {
+        if (closed) {
+          return;
+        }
         try {
           cachedData = self.readFileSync(path);
-          emit('data', cachedData);
-          for (const target of pipeTargets) {
-            writeToDest(target, cachedData);
-          }
-
-          ended = true;
-          emit('end');
-          for (const target of pipeTargets) {
-            endDest(target);
-          }
+          opened = true;
+          emit('open', 0);
+          flush();
         } catch (err) {
           cachedError = err;
           emit('error', err);
           for (const target of pipeTargets) {
             errorDest(target, err);
+          }
+          if (!closed) {
+            closed = true;
+            emit('close');
           }
         }
       }, 0);
@@ -900,30 +948,71 @@ export class VirtualFS {
         if (!listeners[event]) listeners[event] = [];
         listeners[event].push(cb);
 
-        if (event === 'data' && cachedData) {
+        if (event === 'open' && opened) {
+          setTimeout(() => cb(0), 0);
+        } else if (event === 'data' && cachedData && delivered) {
           setTimeout(() => cb(cachedData), 0);
         } else if (event === 'end' && ended) {
           setTimeout(() => cb(), 0);
         } else if (event === 'error' && cachedError) {
           setTimeout(() => cb(cachedError), 0);
+        } else if (event === 'close' && closed) {
+          setTimeout(() => cb(), 0);
         }
 
         start();
         return stream;
       },
+      once(event: string, cb: (...args: unknown[]) => void) {
+        const wrapped = (...args: unknown[]) => {
+          removeListener(event, wrapped);
+          cb(...args);
+        };
+        stream.on(event, wrapped);
+        return stream;
+      },
       pipe(dest: unknown) {
         pipeTargets.push(dest);
-        if (cachedData) {
-          writeToDest(dest, cachedData);
+        if (dest && typeof dest === 'object') {
+          const emittable = dest as { emit?: (event: string, source: unknown) => void };
+          if (typeof emittable.emit === 'function') {
+            emittable.emit('pipe', stream);
+          }
         }
-        if (ended) {
+        if (cachedData && delivered) {
+          writeToDest(dest, cachedData);
           endDest(dest);
         } else if (cachedError) {
           errorDest(dest, cachedError);
         }
+        flush();
         start();
         return dest;
       },
+      pause() {
+        paused = true;
+        return stream;
+      },
+      resume() {
+        paused = false;
+        flush();
+        start();
+        return stream;
+      },
+      destroy(error?: unknown) {
+        if (closed) {
+          return stream;
+        }
+        if (error) {
+          cachedError = error;
+          emit('error', error);
+        }
+        closed = true;
+        ended = true;
+        emit('close');
+        return stream;
+      },
+      emit,
     };
 
     return stream;

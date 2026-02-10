@@ -137,6 +137,14 @@ export class Readable extends EventEmitter {
   }
 
   pipe<T extends Writable>(destination: T): T {
+    const destWithEmit = destination as T & {
+      emit?: (event: string, ...args: unknown[]) => unknown;
+    };
+
+    if (typeof destWithEmit.emit === 'function') {
+      destWithEmit.emit('pipe', this);
+    }
+
     this.on('data', (chunk: unknown) => {
       destination.write(chunk as Uint8Array | string);
     });
@@ -181,6 +189,26 @@ export class Readable extends EventEmitter {
     options?: { objectMode?: boolean; highWaterMark?: number }
   ): Readable {
     const readable = new Readable();
+
+    const isSingleBinaryChunk =
+      typeof iterable === 'string' ||
+      iterable instanceof ArrayBuffer ||
+      ArrayBuffer.isView(iterable);
+
+    if (isSingleBinaryChunk) {
+      queueMicrotask(() => {
+        const value = iterable as string | ArrayBuffer | ArrayBufferView;
+        if (typeof value === 'string') {
+          readable.push(Buffer.from(value));
+        } else if (value instanceof ArrayBuffer) {
+          readable.push(Buffer.from(value));
+        } else {
+          readable.push(Buffer.from(value as ArrayBufferView as Uint8Array));
+        }
+        readable.push(null);
+      });
+      return readable;
+    }
 
     // Handle async iteration
     (async () => {
@@ -460,6 +488,71 @@ Object.defineProperty(Stream.prototype, 'constructor', {
 });
 
 Stream.prototype.pipe = function <T extends Writable>(destination: T): T {
+  const source = this as unknown as EventEmitter & {
+    on: (event: string, listener: (...args: unknown[]) => void) => unknown;
+    removeListener?: (event: string, listener: (...args: unknown[]) => void) => unknown;
+    listenerCount?: (event: string) => number;
+    pause?: () => unknown;
+    resume?: () => unknown;
+  };
+
+  const dest = destination as unknown as EventEmitter & {
+    write?: (chunk: unknown) => boolean;
+    end?: () => void;
+    destroy?: (error?: Error) => void;
+    emit?: (event: string, ...args: unknown[]) => unknown;
+    on?: (event: string, listener: (...args: unknown[]) => void) => unknown;
+    removeListener?: (event: string, listener: (...args: unknown[]) => void) => unknown;
+  };
+
+  const onData = (chunk: unknown) => {
+    if (typeof dest.write !== 'function') {
+      dest.emit?.('data', chunk);
+      return;
+    }
+    const canContinue = dest.write(chunk);
+    if (canContinue === false) {
+      source.pause?.();
+    }
+  };
+
+  const onDrain = () => {
+    source.resume?.();
+  };
+
+  const onEnd = () => {
+    dest.end?.();
+    cleanup();
+  };
+
+  const onClose = () => {
+    dest.destroy?.();
+    cleanup();
+  };
+
+  const onError = (error: unknown) => {
+    cleanup();
+    const err = error instanceof Error ? error : new Error(String(error));
+    if ((source.listenerCount?.('error') || 0) === 0) {
+      throw err;
+    }
+  };
+
+  const cleanup = () => {
+    source.removeListener?.('data', onData);
+    source.removeListener?.('end', onEnd);
+    source.removeListener?.('close', onClose);
+    source.removeListener?.('error', onError);
+    dest.removeListener?.('drain', onDrain);
+  };
+
+  source.on('data', onData);
+  source.on('end', onEnd);
+  source.on('close', onClose);
+  source.on('error', onError);
+  dest.on?.('drain', onDrain);
+  dest.emit?.('pipe', source);
+
   return destination;
 };
 

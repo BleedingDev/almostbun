@@ -419,6 +419,50 @@ describe('runtime lru-cache interop', () => {
     });
   });
 
+  it('normalizes Uint8Array and ArrayBuffer inputs for etag-style modules', () => {
+    vfs.writeFileSync(
+      '/project/node_modules/etag/package.json',
+      JSON.stringify({
+        name: 'etag',
+        version: '0.0.0-test',
+        main: 'index.js',
+      })
+    );
+    vfs.writeFileSync(
+      '/project/node_modules/etag/index.js',
+      `
+      const { Buffer } = require('buffer');
+
+      function etag(entity) {
+        if (typeof entity !== 'string' && !Buffer.isBuffer(entity)) {
+          throw new TypeError('argument entity must be string, Buffer, or fs.Stats');
+        }
+        return 'W/"' + entity.length + '"';
+      }
+
+      module.exports = etag;
+      `
+    );
+
+    const { exports } = runtime.execute(
+      `
+      const etag = require('etag');
+      module.exports = {
+        fromUint8Array: etag(new Uint8Array([1, 2, 3])),
+        fromArrayBuffer: etag(new Uint8Array([4, 5]).buffer),
+        fromString: etag('ok'),
+      };
+      `,
+      '/project/entry-etag-compat.js'
+    );
+
+    expect(exports).toEqual({
+      fromUint8Array: 'W/"3"',
+      fromArrayBuffer: 'W/"2"',
+      fromString: 'W/"2"',
+    });
+  });
+
   it('supports legacy EventEmitter.call(this) inheritance paths', () => {
     const { exports } = runtime.execute(
       `

@@ -58,6 +58,42 @@ describe('Stream module (Node.js compat)', () => {
       expect(emitted).toBe(true);
       expect(typeof legacy.pipe).toBe('function');
     });
+
+    it('legacy Stream.pipe forwards data/end and emits pipe', async () => {
+      const source = new Stream() as unknown as {
+        pipe: (destination: Writable) => Writable;
+        emit: (event: string, ...args: unknown[]) => boolean;
+      };
+      const received: Buffer[] = [];
+      let pipeEventFired = false;
+      let ended = false;
+
+      const destination = new Writable();
+      destination.write = ((chunk: Uint8Array | string) => {
+        received.push(typeof chunk === 'string' ? Buffer.from(chunk) : (chunk as Buffer));
+        return true;
+      }) as Writable['write'];
+      const originalEnd = destination.end.bind(destination);
+      destination.end = ((...args: Parameters<Writable['end']>) => {
+        ended = true;
+        return originalEnd(...args);
+      }) as Writable['end'];
+
+      destination.on('pipe', (pipedSource) => {
+        pipeEventFired = true;
+        expect(pipedSource).toBe(source);
+      });
+
+      source.pipe(destination);
+      source.emit('data', Buffer.from('legacy'));
+      source.emit('end');
+
+      await new Promise(resolve => queueMicrotask(resolve));
+
+      expect(Buffer.concat(received).toString()).toBe('legacy');
+      expect(pipeEventFired).toBe(true);
+      expect(ended).toBe(true);
+    });
   });
 
   describe('Readable', () => {
@@ -231,6 +267,22 @@ describe('Stream module (Node.js compat)', () => {
 
         assert.strictEqual(writable.writableEnded, true);
       });
+
+      it('should emit pipe event on destination', async () => {
+        const readable = new Readable();
+        const writable = new Writable();
+        let pipedSource: unknown = null;
+
+        writable.on('pipe', (source) => {
+          pipedSource = source;
+        });
+
+        readable.pipe(writable);
+        readable.push(null);
+
+        await new Promise(resolve => queueMicrotask(resolve));
+        assert.strictEqual(pipedSource, readable);
+      });
     });
 
     describe('destroy', () => {
@@ -278,6 +330,21 @@ describe('Stream module (Node.js compat)', () => {
 
         const result = Buffer.concat(chunks).toString();
         assert.strictEqual(result, 'hello world');
+      });
+
+      it('should treat Buffer input as a single chunk', async () => {
+        const data = Buffer.from('buffer-input');
+        const readable = Readable.from(data);
+        const chunks: Buffer[] = [];
+
+        readable.on('data', (chunk) => {
+          chunks.push(chunk as Buffer);
+        });
+
+        await new Promise(resolve => readable.on('end', resolve));
+
+        assert.strictEqual(chunks.length, 1);
+        assert.strictEqual(Buffer.concat(chunks).toString(), 'buffer-input');
       });
 
       it('should create stream from generator', async () => {
