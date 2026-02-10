@@ -827,28 +827,104 @@ export class VirtualFS {
   } {
     const self = this;
     const listeners: Record<string, ((...args: unknown[]) => void)[]> = {};
+    let started = false;
+    let cachedData: Uint8Array | null = null;
+    let cachedError: unknown = null;
+    let ended = false;
+
+    const emit = (event: string, ...args: unknown[]): void => {
+      listeners[event]?.forEach((cb) => cb(...args));
+    };
+
+    const writeToDest = (dest: unknown, data: Uint8Array): void => {
+      if (!dest || typeof dest !== 'object') {
+        return;
+      }
+      const writable = dest as { write?: (chunk: Uint8Array) => unknown };
+      if (typeof writable.write === 'function') {
+        writable.write(data);
+      }
+    };
+
+    const endDest = (dest: unknown): void => {
+      if (!dest || typeof dest !== 'object') {
+        return;
+      }
+      const writable = dest as { end?: () => unknown };
+      if (typeof writable.end === 'function') {
+        writable.end();
+      }
+    };
+
+    const errorDest = (dest: unknown, error: unknown): void => {
+      if (!dest || typeof dest !== 'object') {
+        return;
+      }
+      const emittable = dest as { emit?: (event: string, error: unknown) => unknown };
+      if (typeof emittable.emit === 'function') {
+        emittable.emit('error', error);
+      }
+    };
+
+    const pipeTargets: unknown[] = [];
+    const start = (): void => {
+      if (started) return;
+      started = true;
+
+      // Emit data asynchronously
+      setTimeout(() => {
+        try {
+          cachedData = self.readFileSync(path);
+          emit('data', cachedData);
+          for (const target of pipeTargets) {
+            writeToDest(target, cachedData);
+          }
+
+          ended = true;
+          emit('end');
+          for (const target of pipeTargets) {
+            endDest(target);
+          }
+        } catch (err) {
+          cachedError = err;
+          emit('error', err);
+          for (const target of pipeTargets) {
+            errorDest(target, err);
+          }
+        }
+      }, 0);
+    };
 
     const stream = {
       on(event: string, cb: (...args: unknown[]) => void) {
         if (!listeners[event]) listeners[event] = [];
         listeners[event].push(cb);
+
+        if (event === 'data' && cachedData) {
+          setTimeout(() => cb(cachedData), 0);
+        } else if (event === 'end' && ended) {
+          setTimeout(() => cb(), 0);
+        } else if (event === 'error' && cachedError) {
+          setTimeout(() => cb(cachedError), 0);
+        }
+
+        start();
         return stream;
       },
       pipe(dest: unknown) {
+        pipeTargets.push(dest);
+        if (cachedData) {
+          writeToDest(dest, cachedData);
+        }
+        if (ended) {
+          endDest(dest);
+        } else if (cachedError) {
+          errorDest(dest, cachedError);
+        }
+        start();
         return dest;
       },
     };
-
-    // Emit data asynchronously
-    setTimeout(() => {
-      try {
-        const data = self.readFileSync(path);
-        listeners['data']?.forEach((cb) => cb(data));
-        listeners['end']?.forEach((cb) => cb());
-      } catch (err) {
-        listeners['error']?.forEach((cb) => cb(err));
-      }
-    }, 0);
 
     return stream;
   }

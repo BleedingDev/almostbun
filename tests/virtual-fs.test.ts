@@ -226,4 +226,62 @@ describe('VirtualFS', () => {
       expect(vfs.readFileSync('/a/file.txt', 'utf8')).toBe('content');
     });
   });
+
+  describe('stream helpers', () => {
+    it('createReadStream emits data and end', async () => {
+      vfs.writeFileSync('/stream.txt', 'hello stream');
+
+      const chunks: Uint8Array[] = [];
+      let ended = false;
+
+      await new Promise<void>((resolve, reject) => {
+        const stream = vfs.createReadStream('/stream.txt');
+        stream.on('data', (chunk) => {
+          chunks.push(chunk as Uint8Array);
+        });
+        stream.on('end', () => {
+          ended = true;
+          resolve();
+        });
+        stream.on('error', (err) => {
+          reject(err);
+        });
+      });
+
+      const combined = Buffer.concat(chunks.map(chunk => Buffer.from(chunk))).toString('utf8');
+      expect(combined).toBe('hello stream');
+      expect(ended).toBe(true);
+    });
+
+    it('createReadStream.pipe writes to destination and ends it', async () => {
+      vfs.writeFileSync('/pipe.txt', 'pipe works');
+
+      const written: Uint8Array[] = [];
+      let endCalled = false;
+
+      await new Promise<void>((resolve, reject) => {
+        const destination = {
+          write(chunk: Uint8Array) {
+            written.push(chunk);
+          },
+          end() {
+            endCalled = true;
+            resolve();
+          },
+          emit(event: string, error: unknown) {
+            if (event === 'error') {
+              reject(error);
+            }
+          },
+        };
+
+        const stream = vfs.createReadStream('/pipe.txt');
+        stream.pipe(destination);
+      });
+
+      const combined = Buffer.concat(written.map(chunk => Buffer.from(chunk))).toString('utf8');
+      expect(combined).toBe('pipe works');
+      expect(endCalled).toBe(true);
+    });
+  });
 });
