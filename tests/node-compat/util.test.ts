@@ -108,8 +108,7 @@ describe('util module (Node.js compat)', () => {
         assert.strictEqual(format('%s %s', 'hello'), 'hello %s');
       });
 
-      // Skipped: Known limitation - when first arg isn't a string, our shim doesn't include it
-      it.skip('should handle no format string', () => {
+      it('should handle no format string', () => {
         const result = format({ a: 1 } as any);
         expect(result).toContain('a');
       });

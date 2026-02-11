@@ -35,7 +35,22 @@ export function normalize(path: string): string {
 
 export function join(...paths: string[]): string {
   if (paths.length === 0) return '.';
-  return normalize(paths.filter(Boolean).join('/'));
+  const filtered = paths.filter(Boolean);
+  if (filtered.length === 0) return '.';
+
+  const hasTrailingSlash = /\/+$/.test(filtered[filtered.length - 1]);
+  const normalized = normalize(filtered.join('/'));
+
+  if (
+    hasTrailingSlash &&
+    normalized !== '.' &&
+    normalized !== '/' &&
+    !normalized.endsWith('/')
+  ) {
+    return `${normalized}/`;
+  }
+
+  return normalized;
 }
 
 export function resolve(...paths: string[]): string {

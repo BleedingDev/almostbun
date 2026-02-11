@@ -65,8 +65,7 @@ describe('path module (Node.js compat)', () => {
       assert.strictEqual(join(''), '.');
     });
 
-    // Skipped: Known limitation - our shim doesn't preserve trailing slashes in join
-    it.skip('should handle trailing slashes', () => {
+    it('should handle trailing slashes', () => {
       assert.strictEqual(join('foo/', 'bar/'), 'foo/bar/');
       assert.strictEqual(join('foo/', 'bar/', 'baz/'), 'foo/bar/baz/');
     });

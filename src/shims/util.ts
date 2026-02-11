@@ -5,7 +5,7 @@
 
 export function format(fmt: string, ...args: unknown[]): string {
   if (typeof fmt !== 'string') {
-    return args.map((arg) => inspect(arg)).join(' ');
+    return [inspect(fmt), ...args.map((arg) => inspect(arg))].join(' ');
   }
 
   let i = 0;
