@@ -113,14 +113,14 @@ describe('Stream module (Node.js compat)', () => {
         });
 
         // Wait for microtask to set up flowing mode
-        await new Promise(resolve => queueMicrotask(resolve));
+        await new Promise<void>(resolve => queueMicrotask(resolve));
 
         readable.push(Buffer.from('hello'));
         readable.push(Buffer.from(' world'));
         readable.push(null);
 
         // Wait for data events to fire
-        await new Promise(resolve => queueMicrotask(resolve));
+        await new Promise<void>(resolve => queueMicrotask(resolve));
 
         const combined = Buffer.concat(chunks);
         assert.strictEqual(combined.toString(), 'hello world');
@@ -136,7 +136,7 @@ describe('Stream module (Node.js compat)', () => {
         });
 
         // Wait for flowing mode
-        await new Promise(resolve => queueMicrotask(resolve));
+        await new Promise<void>(resolve => queueMicrotask(resolve));
 
         readable.push(Buffer.from('data'));
         readable.push(null);
@@ -152,12 +152,12 @@ describe('Stream module (Node.js compat)', () => {
 
         readable.on('data', () => {});
 
-        await new Promise(resolve => queueMicrotask(resolve));
+        await new Promise<void>(resolve => queueMicrotask(resolve));
 
         assert.strictEqual(readable.readableEnded, false);
         readable.push(null);
 
-        await new Promise(resolve => queueMicrotask(resolve));
+        await new Promise<void>(resolve => queueMicrotask(resolve));
 
         assert.strictEqual(readable.readableEnded, true);
       });
@@ -172,10 +172,10 @@ describe('Stream module (Node.js compat)', () => {
           chunks.push(chunk as Buffer);
         });
 
-        await new Promise(resolve => queueMicrotask(resolve));
+        await new Promise<void>(resolve => queueMicrotask(resolve));
 
         readable.push(Buffer.from('chunk1'));
-        await new Promise(resolve => queueMicrotask(resolve));
+        await new Promise<void>(resolve => queueMicrotask(resolve));
 
         readable.pause();
         readable.push(Buffer.from('chunk2')); // Should be buffered
@@ -186,7 +186,7 @@ describe('Stream module (Node.js compat)', () => {
         assert.strictEqual(chunks.length, 1);
 
         readable.resume();
-        await new Promise(resolve => queueMicrotask(resolve));
+        await new Promise<void>(resolve => queueMicrotask(resolve));
 
         assert.strictEqual(chunks.length, 2);
       });
@@ -197,7 +197,7 @@ describe('Stream module (Node.js compat)', () => {
         assert.strictEqual(readable.readableFlowing, null);
 
         readable.on('data', () => {});
-        await new Promise(resolve => queueMicrotask(resolve));
+        await new Promise<void>(resolve => queueMicrotask(resolve));
 
         assert.strictEqual(readable.readableFlowing, true);
 
@@ -296,7 +296,7 @@ describe('Stream module (Node.js compat)', () => {
 
         readable.destroy();
 
-        await new Promise(resolve => queueMicrotask(resolve));
+        await new Promise<void>(resolve => queueMicrotask(resolve));
         assert.strictEqual(closed, true);
       });
 
@@ -311,7 +311,7 @@ describe('Stream module (Node.js compat)', () => {
         const error = new Error('test error');
         readable.destroy(error);
 
-        await new Promise(resolve => queueMicrotask(resolve));
+        await new Promise<void>(resolve => queueMicrotask(resolve));
         assert.strictEqual(errorReceived, error);
       });
     });
@@ -514,7 +514,7 @@ describe('Stream module (Node.js compat)', () => {
           callbackCalled = true;
         });
 
-        await new Promise(resolve => queueMicrotask(resolve));
+        await new Promise<void>(resolve => queueMicrotask(resolve));
         assert.strictEqual(callbackCalled, true);
       });
 
@@ -526,7 +526,7 @@ describe('Stream module (Node.js compat)', () => {
           callbackCalled = true;
         });
 
-        await new Promise(resolve => queueMicrotask(resolve));
+        await new Promise<void>(resolve => queueMicrotask(resolve));
         assert.strictEqual(callbackCalled, true);
       });
     });
@@ -537,7 +537,7 @@ describe('Stream module (Node.js compat)', () => {
         writable.write('hello');
         writable.end();
 
-        await new Promise(resolve => queueMicrotask(resolve));
+        await new Promise<void>(resolve => queueMicrotask(resolve));
 
         assert.strictEqual(writable.writable, false);
         assert.strictEqual(writable.writableEnded, true);
@@ -553,7 +553,7 @@ describe('Stream module (Node.js compat)', () => {
 
         writable.end();
 
-        await new Promise(resolve => queueMicrotask(resolve));
+        await new Promise<void>(resolve => queueMicrotask(resolve));
         assert.strictEqual(finished, true);
       });
 
@@ -562,7 +562,7 @@ describe('Stream module (Node.js compat)', () => {
         writable.write('hello');
         writable.end(' world');
 
-        await new Promise(resolve => queueMicrotask(resolve));
+        await new Promise<void>(resolve => queueMicrotask(resolve));
         assert.strictEqual(writable.getBufferAsString(), 'hello world');
       });
 
@@ -574,7 +574,7 @@ describe('Stream module (Node.js compat)', () => {
           callbackCalled = true;
         });
 
-        await new Promise(resolve => queueMicrotask(resolve));
+        await new Promise<void>(resolve => queueMicrotask(resolve));
         assert.strictEqual(callbackCalled, true);
       });
 
@@ -582,14 +582,14 @@ describe('Stream module (Node.js compat)', () => {
         const writable = new Writable();
         writable.end();
 
-        await new Promise(resolve => queueMicrotask(resolve));
+        await new Promise<void>(resolve => queueMicrotask(resolve));
 
         let errorReceived = false;
         writable.write('test', (err) => {
           errorReceived = err !== null;
         });
 
-        await new Promise(resolve => queueMicrotask(resolve));
+        await new Promise<void>(resolve => queueMicrotask(resolve));
         assert.strictEqual(errorReceived, true);
       });
     });
@@ -605,7 +605,7 @@ describe('Stream module (Node.js compat)', () => {
 
         writable.destroy();
 
-        await new Promise(resolve => queueMicrotask(resolve));
+        await new Promise<void>(resolve => queueMicrotask(resolve));
         assert.strictEqual(closed, true);
       });
     });
@@ -649,12 +649,12 @@ describe('Stream module (Node.js compat)', () => {
         chunks.push(chunk as Buffer);
       });
 
-      await new Promise(resolve => queueMicrotask(resolve));
+      await new Promise<void>(resolve => queueMicrotask(resolve));
 
       passthrough.write('hello');
       passthrough.write(' world');
 
-      await new Promise(resolve => queueMicrotask(resolve));
+      await new Promise<void>(resolve => queueMicrotask(resolve));
 
       const combined = Buffer.concat(chunks);
       assert.strictEqual(combined.toString(), 'hello world');
@@ -676,18 +676,18 @@ describe('Stream module (Node.js compat)', () => {
         chunks.push(chunk as Buffer);
       });
 
-      await new Promise(resolve => queueMicrotask(resolve));
+      await new Promise<void>(resolve => queueMicrotask(resolve));
 
       transform.write('hello');
 
-      await new Promise(resolve => queueMicrotask(resolve));
+      await new Promise<void>(resolve => queueMicrotask(resolve));
 
       assert.strictEqual(chunks[0]?.toString(), 'hello');
     });
 
     it('should allow custom transform implementation', async () => {
       class UpperCaseTransform extends Transform {
-        _transform(chunk: Buffer, encoding: string, callback: (error?: Error | null, data?: Buffer) => void): void {
+        _transform(chunk: any, encoding: string, callback: (error?: Error | null, data?: any) => void): void {
           callback(null, Buffer.from(chunk.toString().toUpperCase()));
         }
       }
@@ -699,11 +699,11 @@ describe('Stream module (Node.js compat)', () => {
         chunks.push(chunk as Buffer);
       });
 
-      await new Promise(resolve => queueMicrotask(resolve));
+      await new Promise<void>(resolve => queueMicrotask(resolve));
 
       transform.write('hello');
 
-      await new Promise(resolve => queueMicrotask(resolve));
+      await new Promise<void>(resolve => queueMicrotask(resolve));
 
       assert.strictEqual(chunks[0]?.toString(), 'HELLO');
     });
@@ -774,7 +774,7 @@ describe('Stream module (Node.js compat)', () => {
 
     it('should handle readable -> transform -> writable', async () => {
       class ReverseTransform extends Transform {
-        _transform(chunk: Buffer, encoding: string, callback: (error?: Error | null, data?: Buffer) => void): void {
+        _transform(chunk: any, encoding: string, callback: (error?: Error | null, data?: any) => void): void {
           const reversed = chunk.toString().split('').reverse().join('');
           callback(null, Buffer.from(reversed));
         }
@@ -819,7 +819,7 @@ describe('Stream module (Node.js compat)', () => {
         count++;
       });
 
-      await new Promise(resolve => queueMicrotask(resolve));
+      await new Promise<void>(resolve => queueMicrotask(resolve));
 
       readable.push(Buffer.from('first'));
       readable.push(Buffer.from('second'));
@@ -838,10 +838,10 @@ describe('Stream module (Node.js compat)', () => {
         count++;
       });
 
-      await new Promise(resolve => queueMicrotask(resolve));
+      await new Promise<void>(resolve => queueMicrotask(resolve));
 
       readable.push(Buffer.from('first'));
-      await new Promise(resolve => queueMicrotask(resolve));
+      await new Promise<void>(resolve => queueMicrotask(resolve));
 
       readable.removeAllListeners('data');
 

@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.11] - 2026-02-09
+
+### Fixed
+
+- **Firefox blank preview:** Fixed Vite dev server injecting `<script type="module">` (React Refresh preamble) before `<script type="importmap">` in served HTML. Firefox strictly requires import maps to appear before any module scripts. The preamble is now injected after the last import map when one is present. ([#3](https://github.com/macaly/almostnode/issues/3))
+
+## [0.2.10] - 2026-02-09
+
+### Changed
+
+- **Next.js dev server refactoring:** Extracted route resolution and API handler logic into standalone modules, reducing `next-dev-server.ts` from ~2240 to ~1360 lines (39% reduction):
+  - `next-route-resolver.ts` (~600 lines) — App Router/Pages Router route resolution, dynamic routes, route groups, catch-all segments
+  - `next-api-handler.ts` (~350 lines) — mock request/response objects, cookie parsing, API handler execution, streaming support
+- **115 new unit tests** for the extracted modules (63 route resolver + 52 API handler)
+
 ## [0.2.9] - 2026-02-08
 
 ### Added

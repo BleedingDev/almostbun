@@ -16,6 +16,11 @@ export function lookup(
 ): void;
 export function lookup(
   hostname: string,
+  options: { family?: number; all?: true },
+  callback: LookupAllCallback
+): void;
+export function lookup(
+  hostname: string,
   options: { family?: number; all?: boolean },
   callback: LookupCallback | LookupAllCallback
 ): void;
@@ -121,6 +126,14 @@ export function getDefaultResultOrder(): string {
 export const promises = {
   lookup: (hostname: string, options?: { family?: number; all?: boolean }) => {
     return new Promise((resolve, reject) => {
+      if (options?.all) {
+        lookup(hostname, options, ((err: Error | null, addresses?: Array<{ address: string; family: number }>) => {
+          if (err) reject(err);
+          else resolve(addresses || []);
+        }) as LookupAllCallback);
+        return;
+      }
+
       lookup(hostname, options || {}, (err, address, family) => {
         if (err) reject(err);
         else resolve({ address, family });

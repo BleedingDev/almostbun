@@ -3,449 +3,136 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Next.js Demo - WebContainer Test</title>
+    <title>Next.js Demo — almostnode agent runtime</title>
+    <link rel="stylesheet" href="./shared-styles.css" />
     <style>
-      * {
-        box-sizing: border-box;
-      }
-
-      body {
-        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
-        margin: 0;
-        padding: 20px;
-        background: #0a0a0a;
-        color: #eee;
-        min-height: 100vh;
-      }
-
-      h1 {
-        color: #fff;
-        margin-bottom: 10px;
-      }
-
-      h1 span {
-        background: linear-gradient(90deg, #0070f3 0%, #00a3ff 100%);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-      }
-
-      .subtitle {
-        color: #888;
-        margin-bottom: 20px;
-      }
-
-      .container {
+      .layout {
         display: grid;
         grid-template-columns: 1fr 1fr 1fr;
-        gap: 20px;
-        height: calc(100vh - 140px);
+        gap: 1px;
+        background: var(--border);
+        height: calc(100vh - 44px);
       }
-
-      .panel {
-        background: #1a1a1a;
-        border: 1px solid #333;
-        border-radius: 12px;
-        padding: 15px;
+      .editor-inner {
         display: flex;
         flex-direction: column;
-      }
-
-      .panel-header {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        margin-bottom: 10px;
-        padding-bottom: 10px;
-        border-bottom: 1px solid #333;
-      }
-
-      .panel-title {
-        font-weight: bold;
-        color: #fff;
-      }
-
-      .output {
         flex: 1;
-        background: #111;
-        border-radius: 8px;
-        padding: 10px;
-        font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
-        font-size: 11px;
-        overflow-y: auto;
-        white-space: pre-wrap;
-        word-break: break-word;
+        overflow: hidden;
+        min-height: 0;
       }
-
-      .output div {
-        margin-bottom: 2px;
-      }
-
-      .output .hmr {
-        color: #22c55e;
-        font-weight: bold;
-      }
-
-      .output .error {
-        color: #ef4444;
-      }
-
-      .editor-container {
-        flex: 1;
-        display: flex;
-        flex-direction: column;
-      }
-
-      .file-tabs {
-        display: flex;
-        gap: 5px;
-        margin-bottom: 10px;
-        flex-wrap: wrap;
-      }
-
-      .file-tab {
-        padding: 5px 10px;
-        background: #333;
-        border: none;
-        border-radius: 4px;
-        color: #888;
-        cursor: pointer;
-        font-size: 12px;
-      }
-
-      .file-tab.active {
-        background: #0070f3;
-        color: white;
-      }
-
-      .file-tab:hover:not(.active) {
-        background: #444;
-      }
-
-      textarea {
-        flex: 1;
-        background: #111;
-        border: 1px solid #333;
-        border-radius: 8px;
-        padding: 10px;
-        font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
-        font-size: 13px;
-        color: #eee;
-        resize: none;
-        line-height: 1.5;
-      }
-
-      textarea:focus {
-        outline: none;
-        border-color: #0070f3;
-      }
-
-      .actions {
-        display: flex;
-        gap: 10px;
-        margin-top: 10px;
-        flex-wrap: wrap;
-      }
-
-      button {
-        padding: 8px 16px;
-        background: #0070f3;
-        border: none;
-        border-radius: 6px;
-        color: white;
-        cursor: pointer;
-        font-size: 14px;
-        transition: background 0.2s;
-      }
-
-      button:hover {
-        background: #005cc5;
-      }
-
-      button:disabled {
-        background: #333;
-        cursor: not-allowed;
-      }
-
-      .preview-frame {
-        flex: 1;
-        border: none;
-        border-radius: 8px;
-        background: white;
-      }
-
-      .url-bar {
-        display: flex;
-        gap: 8px;
-        margin-bottom: 10px;
-      }
-
-      .url-input {
-        flex: 1;
-        background: #111;
-        border: 1px solid #333;
-        border-radius: 6px;
-        padding: 8px 12px;
-        font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
-        font-size: 13px;
-        color: #eee;
-      }
-
-      .url-input:focus {
-        outline: none;
-        border-color: #0070f3;
-      }
-
-      .url-go-btn {
-        padding: 8px 12px;
-        font-size: 12px;
-      }
-
-      .status {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        font-size: 12px;
-      }
-
-      .status-dot {
-        width: 8px;
-        height: 8px;
-        border-radius: 50%;
-        background: #333;
-      }
-
-      .status-dot.running {
-        background: #22c55e;
-      }
-
-      .status-dot.error {
-        background: #ef4444;
-      }
-
-      .preview-placeholder {
-        flex: 1;
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        justify-content: center;
-        background: #111;
-        border-radius: 8px;
-        color: #666;
-        text-align: center;
-        padding: 20px;
-      }
-
-      .preview-placeholder .icon {
-        font-size: 48px;
-        margin-bottom: 10px;
-      }
-
-      .hmr-indicator {
-        position: fixed;
-        top: 20px;
-        right: 20px;
-        background: #22c55e;
-        color: white;
-        padding: 10px 20px;
-        border-radius: 8px;
-        font-weight: bold;
-        opacity: 0;
-        transform: translateY(-20px);
-        transition: opacity 0.3s, transform 0.3s;
-        z-index: 1000;
-      }
-
-      .hmr-indicator.show {
-        opacity: 1;
-        transform: translateY(0);
-      }
-
-      .next-badge {
-        display: inline-flex;
-        align-items: center;
-        gap: 6px;
-        background: #000;
-        border: 1px solid #333;
-        padding: 4px 10px;
-        border-radius: 4px;
-        font-size: 12px;
-        margin-left: 10px;
-      }
-
-      .next-badge svg {
-        width: 16px;
-        height: 16px;
+      @media (max-width: 900px) {
+        .layout { grid-template-columns: 1fr; }
       }
     </style>
   </head>
   <body>
-    <h1>
-      <span>Next.js</span> Demo - File-based Routing in Browser
-      <span class="next-badge">
-        <svg viewBox="0 0 180 180" fill="none" xmlns="http://www.w3.org/2000/svg">
-          <mask id="mask0_408_134" style="mask-type:alpha" maskUnits="userSpaceOnUse" x="0" y="0" width="180" height="180">
-            <circle cx="90" cy="90" r="90" fill="white"/>
-          </mask>
-          <g mask="url(#mask0_408_134)">
-            <circle cx="90" cy="90" r="87" fill="black" stroke="white" stroke-width="6"/>
-            <path d="M149.508 157.52L69.142 54H54V125.97H66.1136V69.3836L139.999 164.845C143.333 162.614 146.509 160.165 149.508 157.52Z" fill="url(#paint0_linear_408_134)"/>
-            <rect x="115" y="54" width="12" height="72" fill="url(#paint1_linear_408_134)"/>
-          </g>
-          <defs>
-            <linearGradient id="paint0_linear_408_134" x1="109" y1="116.5" x2="144.5" y2="160.5" gradientUnits="userSpaceOnUse">
-              <stop stop-color="white"/>
-              <stop offset="1" stop-color="white" stop-opacity="0"/>
-            </linearGradient>
-            <linearGradient id="paint1_linear_408_134" x1="121" y1="54" x2="120.799" y2="106.875" gradientUnits="userSpaceOnUse">
-              <stop stop-color="white"/>
-              <stop offset="1" stop-color="white" stop-opacity="0"/>
-            </linearGradient>
-          </defs>
-        </svg>
-        Next.js Style
-      </span>
-    </h1>
-    <p class="subtitle">
-      File-based routing, API routes, and HMR - all running in your browser
-    </p>
-
-    <div style="display: flex; gap: 10px; margin-bottom: 10px; align-items: center;">
-      <button id="pages-router-btn" class="router-toggle active" style="padding: 6px 16px; border-radius: 20px;">
-        Pages Router (/pages)
-      </button>
-      <button id="app-router-btn" class="router-toggle" style="padding: 6px 16px; border-radius: 20px; background: #333;">
-        App Router (/app)
-      </button>
-      <div style="margin-left: auto; display: flex; align-items: center; gap: 8px;">
-        <label style="display: flex; align-items: center; gap: 6px; cursor: pointer; font-size: 13px; color: #888;">
-          <input type="checkbox" id="worker-toggle" style="width: 16px; height: 16px; cursor: pointer;" />
-          <span>Web Worker Mode</span>
-          <span id="worker-status" style="padding: 2px 8px; border-radius: 10px; font-size: 11px; background: #333; color: #888;">Off</span>
-        </label>
-      </div>
+    <div class="demo-topbar">
+      <a href="../index.html" class="back">← demos</a>
+      <span class="sep">/</span>
+      <a href="../index.html" class="logo">almostnode</a>
+      <span class="sep">/</span>
+      <span class="title">Next.js App</span>
+      <span class="tag">next.js · app router · hmr</span>
     </div>
-    <style>
-      .router-toggle.active { background: #0070f3 !important; }
-      .router-toggle:not(.active) { background: #333 !important; }
-      #install-btn:hover:not(:disabled) { background: #16a34a !important; }
-      #install-btn:disabled { background: #333 !important; cursor: wait; }
-      #set-proxy-btn:hover { background: #4f46e5 !important; }
-      #clear-proxy-btn:hover { background: #666 !important; }
-    </style>
 
-    <div class="hmr-indicator" id="hmr-indicator">HMR Update!</div>
+    <div class="hmr-indicator" id="hmr-indicator">HMR Update</div>
 
-    <div class="container">
-      <!-- Left Panel: Editor -->
+    <div class="layout">
+      <!-- Editor panel -->
       <div class="panel">
         <div class="panel-header">
-          <span class="panel-title">Editor</span>
-          <div class="status">
+          <span class="panel-label">Editor</span>
+          <div style="display:flex;align-items:center;gap:6px;">
             <div class="status-dot" id="status-dot"></div>
-            <span id="status-text">Initializing...</span>
+            <span class="panel-label" id="status-text">Initializing...</span>
           </div>
+        </div>
+
+        <div class="router-tabs">
+          <button id="pages-router-btn" class="router-tab active">Pages Router</button>
+          <button id="app-router-btn" class="router-tab">App Router</button>
         </div>
 
         <div class="file-tabs" id="file-tabs">
-          <button class="file-tab active" data-file="/pages/index.jsx">index.jsx</button>
-          <button class="file-tab" data-file="/pages/about.jsx">about.jsx</button>
-          <button class="file-tab" data-file="/pages/users/[id].jsx">[id].jsx</button>
-          <button class="file-tab" data-file="/pages/api/hello.js">api/hello.js</button>
-          <button class="file-tab" data-file="/styles/globals.css">globals.css</button>
+          <button class="file-tab active" data-file="/pages/index.jsx"><span class="dot"></span>index.jsx</button>
+          <button class="file-tab" data-file="/pages/about.jsx"><span class="dot"></span>about.jsx</button>
+          <button class="file-tab" data-file="/pages/users/[id].jsx"><span class="dot"></span>[id].jsx</button>
+          <button class="file-tab" data-file="/pages/api/hello.js"><span class="dot"></span>api/hello.js</button>
+          <button class="file-tab" data-file="/styles/globals.css"><span class="dot"></span>globals.css</button>
         </div>
 
-        <!-- Package Installation Section -->
-        <div id="package-install-section" style="margin-bottom: 8px; padding: 10px; background: #252525; border-radius: 8px; border: 1px solid #333;">
-          <div style="display: flex; gap: 8px; align-items: center; margin-bottom: 8px;">
-            <input
-              type="text"
-              id="package-input"
-              placeholder="Package name (e.g., lodash, date-fns@3.0.0)"
-              style="flex: 1; padding: 8px 10px; background: #111; border: 1px solid #444; border-radius: 6px; color: #eee; font-size: 13px;"
-            />
-            <button id="install-btn" style="padding: 8px 16px; background: #22c55e; white-space: nowrap;">
-              Install
-            </button>
+        <!-- Package install -->
+        <div class="inline-section">
+          <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px;">
+            <input type="text" id="package-input" placeholder="Package (e.g., lodash, date-fns@3)" style="flex:1;" />
+            <button id="install-btn" class="btn btn-secondary">Install</button>
           </div>
-          <div id="installed-packages" style="font-size: 11px; color: #888;">
-            <span style="color: #666;">Installed:</span> <span id="installed-list">react, react-dom</span>
+          <div style="font-family:var(--mono);font-size:0.6rem;color:var(--text-dim);">
+            Installed: <span id="installed-list">react, react-dom</span>
           </div>
         </div>
 
-        <!-- CORS Proxy Configuration -->
-        <div id="proxy-section" style="margin-bottom: 12px; padding: 10px; background: #252525; border-radius: 8px; border: 1px solid #333;">
-          <div style="display: flex; gap: 8px; align-items: center;">
-            <input
-              type="text"
-              id="proxy-input"
-              placeholder="CORS Proxy URL (e.g., https://corsproxy.io/?)"
-              style="flex: 1; padding: 8px 10px; background: #111; border: 1px solid #444; border-radius: 6px; color: #eee; font-size: 13px;"
-            />
-            <button id="set-proxy-btn" style="padding: 8px 12px; background: #6366f1; white-space: nowrap;">
-              Set
-            </button>
-            <button id="clear-proxy-btn" style="padding: 8px 12px; background: #555; white-space: nowrap;">
-              Clear
-            </button>
+        <!-- CORS proxy -->
+        <div class="inline-section">
+          <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px;">
+            <input type="text" id="proxy-input" placeholder="CORS Proxy URL" style="flex:1;" />
+            <button id="set-proxy-btn" class="btn btn-secondary">Set</button>
+            <button id="clear-proxy-btn" class="btn btn-secondary">Clear</button>
           </div>
-          <div style="font-size: 11px; color: #888; margin-top: 6px;">
-            <span style="color: #666;">Proxy:</span> <span id="proxy-status">Not configured (direct fetch)</span>
+          <div style="font-family:var(--mono);font-size:0.6rem;color:var(--text-dim);">
+            Proxy: <span id="proxy-status">Not configured</span>
           </div>
         </div>
 
-        <div class="editor-container">
+        <div class="editor-inner">
           <textarea id="editor" placeholder="Loading..."></textarea>
         </div>
 
-        <div class="actions">
-          <button id="save-btn" disabled>Save (triggers HMR)</button>
-          <button id="run-btn" disabled style="background: #22c55e;">Start Preview</button>
+        <div class="toolbar">
+          <button id="save-btn" class="btn btn-primary" disabled>Save</button>
+          <button id="run-btn" class="btn btn-secondary" disabled>Start Preview</button>
+          <label class="toggle-row" style="margin-left:auto;">
+            <input type="checkbox" id="worker-toggle" />
+            <span>Worker</span>
+            <span id="worker-status" class="toggle-badge">Off</span>
+          </label>
         </div>
       </div>
 
-      <!-- Middle Panel: Preview -->
+      <!-- Preview panel -->
       <div class="panel">
         <div class="panel-header">
-          <span class="panel-title">Live Preview</span>
-          <button id="refresh-btn" style="padding: 4px 8px; font-size: 12px;">Refresh</button>
+          <span class="panel-label">Live Preview</span>
+          <button id="refresh-btn" class="btn btn-secondary" style="padding:4px 10px;">Refresh</button>
         </div>
-
         <div class="url-bar">
-          <input type="text" id="url-input" class="url-input" placeholder="/" value="/" />
-          <button id="url-go-btn" class="url-go-btn">Go</button>
+          <input type="text" id="url-input" value="/" />
+          <button id="url-go-btn" class="btn btn-secondary">Go</button>
         </div>
-
         <div class="preview-placeholder" id="preview-placeholder">
-          <div class="icon">N</div>
-          <div>Click <strong>"Start Preview"</strong> to launch the dev server</div>
-          <div style="margin-top: 10px; color: #888;">Uses Service Worker for Next.js-like experience</div>
+          Click Start Preview to launch the Next.js dev server
         </div>
-
-        <iframe id="preview-frame" class="preview-frame" style="display: none;"></iframe>
+        <iframe id="preview-frame" class="preview-frame" style="display:none;"></iframe>
       </div>
 
-      <!-- Right Panel: Console Output -->
+      <!-- Console panel -->
       <div class="panel">
         <div class="panel-header">
-          <span class="panel-title">Console</span>
-          <button id="clear-btn" style="padding: 4px 8px; font-size: 12px;">Clear</button>
+          <span class="panel-label">Console</span>
+          <button id="clear-btn" class="btn btn-secondary" style="padding:4px 10px;">Clear</button>
         </div>
-        <div class="output" id="output"></div>
+        <div class="terminal" id="output"></div>
       </div>
     </div>
 
     <script type="module">
       import { initNextDemo, initNextAppRouterDemo, startNextDevServer, VirtualFS, Runtime, PackageManager, createRuntime } from '../src/next-demo.ts';
 
-      // CORS Proxy helpers - use localStorage so iframe can access
+      // CORS Proxy helpers
       function setCorsProxy(url) {
-        if (url) {
-          localStorage.setItem('__corsProxyUrl', url);
-        } else {
-          localStorage.removeItem('__corsProxyUrl');
-        }
+        if (url) localStorage.setItem('__corsProxyUrl', url);
+        else localStorage.removeItem('__corsProxyUrl');
       }
-
       function getCorsProxy() {
         return localStorage.getItem('__corsProxyUrl') || null;
       }
@@ -490,22 +177,19 @@
       function updateWorkerStatus() {
         if (useWorker) {
           workerStatus.textContent = 'On';
-          workerStatus.style.background = '#22c55e';
-          workerStatus.style.color = 'white';
+          workerStatus.classList.add('on');
         } else {
           workerStatus.textContent = 'Off';
-          workerStatus.style.background = '#333';
-          workerStatus.style.color = '#888';
+          workerStatus.classList.remove('on');
         }
       }
 
-      // File tabs for each router mode
       const pagesRouterTabs = [
         { file: '/pages/index.jsx', label: 'index.jsx' },
         { file: '/pages/about.jsx', label: 'about.jsx' },
         { file: '/pages/users/[id].jsx', label: '[id].jsx' },
-        { file: '/pages/typescript/index.tsx', label: '📘 typescript.tsx' },
-        { file: '/pages/external-api.jsx', label: '🌐 external-api.jsx' },
+        { file: '/pages/typescript/index.tsx', label: 'typescript.tsx' },
+        { file: '/pages/external-api.jsx', label: 'external-api.jsx' },
         { file: '/pages/api/hello.js', label: 'api/hello.js' },
         { file: '/styles/globals.css', label: 'globals.css' },
       ];
@@ -514,7 +198,7 @@
         { file: '/app/page.jsx', label: 'page.jsx' },
         { file: '/app/layout.jsx', label: 'layout.jsx' },
         { file: '/app/about/page.jsx', label: 'about/page.jsx' },
-        { file: '/app/typescript/page.tsx', label: '📘 typescript.tsx' },
+        { file: '/app/typescript/page.tsx', label: 'typescript.tsx' },
         { file: '/app/dashboard/page.jsx', label: 'dashboard/page.jsx' },
         { file: '/app/users/[id]/page.jsx', label: 'users/[id].jsx' },
         { file: '/app/globals.css', label: 'globals.css' },
@@ -542,225 +226,127 @@
         installedList.textContent = Array.from(installedPackages).join(', ') || 'none';
       }
 
-      // Generate a demo page that uses an installed package
       function createPackageDemoPage(packageName) {
-        // Allow hyphens in name (valid for URLs), only remove other special chars
         const safeName = packageName.replace(/[^a-zA-Z0-9-]/g, '');
-        // For JS identifiers, also remove hyphens
         const jsName = packageName.replace(/[^a-zA-Z0-9]/g, '');
         const pagePath = useAppRouter
           ? `/app/${safeName}-demo/page.jsx`
           : `/pages/${safeName}-demo.jsx`;
 
-        // Create directory for App Router
         if (useAppRouter) {
           vfs.mkdirSync(`/app/${safeName}-demo`, { recursive: true });
         }
 
-        // Generate demo content based on package
-        // Use esm.sh for browser-compatible imports
         let demoContent = '';
         if (packageName === 'lodash' || packageName.startsWith('lodash')) {
           demoContent = `'use client';
-
 import React, { useState } from 'react';
 import _ from 'https://esm.sh/lodash@4?dev';
 
 export default function LodashDemo() {
   const [items] = useState(['apple', 'banana', 'cherry', 'date', 'elderberry']);
   const [shuffled, setShuffled] = useState(items);
-
   return (
-    <div className="p-8 max-w-2xl mx-auto">
-      <h1 className="text-3xl font-bold mb-6 text-gray-800">Lodash Demo</h1>
-
-      <div className="bg-white rounded-xl shadow-lg p-6 mb-4">
-        <h2 className="text-xl font-semibold mb-4">Array Shuffle</h2>
-        <div className="flex gap-2 flex-wrap mb-4">
-          {shuffled.map((item, i) => (
-            <span key={i} className="px-3 py-1 bg-blue-100 text-blue-800 rounded-full">
-              {item}
-            </span>
-          ))}
-        </div>
-        <button
-          onClick={() => setShuffled(_.shuffle([...items]))}
-          className="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition"
-        >
-          Shuffle with _.shuffle()
-        </button>
+    <div style={{padding:'2rem',maxWidth:'600px',margin:'0 auto'}}>
+      <h1>Lodash Demo</h1>
+      <div style={{display:'flex',gap:'8px',flexWrap:'wrap',marginBottom:'16px'}}>
+        {shuffled.map((item, i) => <span key={i} style={{padding:'4px 12px',background:'#1a1a1a',border:'1px solid #2a2a2a'}}>{item}</span>)}
       </div>
-
-      <div className="bg-white rounded-xl shadow-lg p-6">
-        <h3 className="font-semibold mb-2">Other Lodash utilities:</h3>
-        <ul className="text-gray-600 space-y-1">
-          <li>_.uniq([1,1,2,3]) = [{_.uniq([1,1,2,3]).join(', ')}]</li>
-          <li>_.capitalize('hello') = "{_.capitalize('hello')}"</li>
-          <li>_.random(1, 100) = {_.random(1, 100)}</li>
-        </ul>
+      <button onClick={() => setShuffled(_.shuffle([...items]))}>Shuffle with _.shuffle()</button>
+      <div style={{marginTop:'16px'}}>
+        <p>_.uniq([1,1,2,3]) = [{_.uniq([1,1,2,3]).join(', ')}]</p>
+        <p>_.capitalize('hello') = "{_.capitalize('hello')}"</p>
+        <p>_.random(1, 100) = {_.random(1, 100)}</p>
       </div>
     </div>
   );
-}
-`;
+}`;
         } else if (packageName === 'date-fns' || packageName.startsWith('date-fns')) {
           demoContent = `'use client';
-
 import React from 'react';
 import { format, formatDistance, subDays, addDays } from 'https://esm.sh/date-fns@3?dev';
 
 export default function DateFnsDemo() {
   const now = new Date();
-
   return (
-    <div className="p-8 max-w-2xl mx-auto">
-      <h1 className="text-3xl font-bold mb-6 text-gray-800">date-fns Demo</h1>
-
-      <div className="bg-white rounded-xl shadow-lg p-6 mb-4">
-        <h2 className="text-xl font-semibold mb-4">Date Formatting</h2>
-        <div className="space-y-3 text-gray-700">
-          <p><span className="font-medium">Full date:</span> {format(now, 'PPPP')}</p>
-          <p><span className="font-medium">Short:</span> {format(now, 'PP')}</p>
-          <p><span className="font-medium">Time:</span> {format(now, 'pp')}</p>
-          <p><span className="font-medium">Custom:</span> {format(now, 'EEEE, MMMM do yyyy')}</p>
-        </div>
-      </div>
-
-      <div className="bg-white rounded-xl shadow-lg p-6">
-        <h2 className="text-xl font-semibold mb-4">Relative Time</h2>
-        <div className="space-y-2 text-gray-700">
-          <p>5 days ago was {formatDistance(subDays(now, 5), now, { addSuffix: true })}</p>
-          <p>In 10 days will be {formatDistance(addDays(now, 10), now, { addSuffix: true })}</p>
-        </div>
-      </div>
+    <div style={{padding:'2rem',maxWidth:'600px',margin:'0 auto'}}>
+      <h1>date-fns Demo</h1>
+      <p>Full: {format(now, 'PPPP')}</p>
+      <p>Short: {format(now, 'PP')}</p>
+      <p>Time: {format(now, 'pp')}</p>
+      <p>5 days ago: {formatDistance(subDays(now, 5), now, { addSuffix: true })}</p>
+      <p>In 10 days: {formatDistance(addDays(now, 10), now, { addSuffix: true })}</p>
     </div>
   );
-}
-`;
+}`;
         } else if (packageName === 'dayjs') {
           demoContent = `'use client';
-
 import React from 'react';
 import dayjs from 'https://esm.sh/dayjs@1?dev';
 import relativeTime from 'https://esm.sh/dayjs@1/plugin/relativeTime?dev';
-
 dayjs.extend(relativeTime);
 
 export default function DayjsDemo() {
   const now = dayjs();
-
   return (
-    <div className="p-8 max-w-2xl mx-auto">
-      <h1 className="text-3xl font-bold mb-6 text-gray-800">Day.js Demo</h1>
-
-      <div className="bg-white rounded-xl shadow-lg p-6 mb-4">
-        <h2 className="text-xl font-semibold mb-4">Date Formatting</h2>
-        <div className="space-y-3 text-gray-700">
-          <p><span className="font-medium">Full:</span> {now.format('dddd, MMMM D, YYYY')}</p>
-          <p><span className="font-medium">Short:</span> {now.format('MM/DD/YYYY')}</p>
-          <p><span className="font-medium">Time:</span> {now.format('h:mm A')}</p>
-          <p><span className="font-medium">ISO:</span> {now.toISOString()}</p>
-        </div>
-      </div>
-
-      <div className="bg-white rounded-xl shadow-lg p-6">
-        <h2 className="text-xl font-semibold mb-4">Relative Time</h2>
-        <div className="space-y-2 text-gray-700">
-          <p>5 days ago: {now.subtract(5, 'day').fromNow()}</p>
-          <p>In 2 weeks: {now.add(2, 'week').fromNow()}</p>
-        </div>
-      </div>
+    <div style={{padding:'2rem',maxWidth:'600px',margin:'0 auto'}}>
+      <h1>Day.js Demo</h1>
+      <p>Full: {now.format('dddd, MMMM D, YYYY')}</p>
+      <p>Short: {now.format('MM/DD/YYYY')}</p>
+      <p>Time: {now.format('h:mm A')}</p>
+      <p>5 days ago: {now.subtract(5, 'day').fromNow()}</p>
+      <p>In 2 weeks: {now.add(2, 'week').fromNow()}</p>
     </div>
   );
-}
-`;
+}`;
         } else {
-          // Generic demo for unknown packages - use esm.sh for browser imports
           demoContent = `'use client';
-
 import React from 'react';
-// Import your package using esm.sh for browser compatibility:
 // import ${jsName} from 'https://esm.sh/${packageName}?dev';
 
 export default function ${jsName.charAt(0).toUpperCase() + jsName.slice(1)}Demo() {
   return (
-    <div className="p-8 max-w-2xl mx-auto">
-      <h1 className="text-3xl font-bold mb-6 text-gray-800">${packageName} Demo</h1>
-
-      <div className="bg-white rounded-xl shadow-lg p-6 mb-4">
-        <h2 className="text-xl font-semibold mb-4">Package Installed!</h2>
-        <p className="text-gray-600 mb-4">
-          The <code className="bg-gray-100 px-2 py-1 rounded">${packageName}</code> package
-          has been installed to node_modules.
-        </p>
-        <p className="text-gray-600 mb-2">
-          To use it in the browser, import via esm.sh:
-        </p>
-        <code className="block bg-gray-100 p-2 rounded text-sm">
-          import ${jsName} from 'https://esm.sh/${packageName}?dev';
-        </code>
-      </div>
-
-      <div className="bg-gradient-to-r from-green-400 to-blue-500 text-white rounded-xl p-6">
-        <p className="font-semibold">Tailwind CSS is working!</p>
-        <p className="text-sm opacity-90">This demo uses Tailwind utility classes.</p>
-      </div>
+    <div style={{padding:'2rem',maxWidth:'600px',margin:'0 auto'}}>
+      <h1>${packageName} Demo</h1>
+      <p>The <code>${packageName}</code> package has been installed.</p>
+      <p>Import via esm.sh:</p>
+      <code>import ${jsName} from 'https://esm.sh/${packageName}?dev';</code>
     </div>
   );
-}
-`;
+}`;
         }
 
         vfs.writeFileSync(pagePath, demoContent);
-        return { pagePath, routePath: useAppRouter ? `/${safeName}-demo` : `/${safeName}-demo` };
+        return { pagePath, routePath: `/${safeName}-demo` };
       }
 
       async function installPackage(packageSpec) {
         if (!vfs || !packageManager) {
-          log('Error: VFS or PackageManager not initialized', 'error');
+          log('VFS or PackageManager not initialized', 'error');
           return;
         }
-
         const packageName = packageSpec.split('@')[0];
-
         installBtn.disabled = true;
         installBtn.textContent = 'Installing...';
-
         try {
           log(`Installing ${packageSpec}...`);
-
           const result = await packageManager.install(packageSpec, {
-            onProgress: (message) => {
-              log(message);
-            },
+            onProgress: (message) => log(message),
           });
-
-          // Update installed packages list
-          for (const name of result.added) {
-            installedPackages.add(name);
-          }
+          for (const name of result.added) installedPackages.add(name);
           updateInstalledList();
-
-          // Create a demo page for the package
           const { pagePath, routePath } = createPackageDemoPage(packageName);
-          log(`Created demo file: ${pagePath}`, 'hmr');
-
-          // Add new tab for the demo file
+          log(`Created demo: ${pagePath}`, 'hmr');
           const tabs = useAppRouter ? appRouterTabs : pagesRouterTabs;
-          const newTab = { file: pagePath, label: `${packageName}-demo.jsx` };
           if (!tabs.find(t => t.file === pagePath)) {
-            tabs.push(newTab);
+            tabs.push({ file: pagePath, label: `${packageName}-demo.jsx` });
             updateFileTabs();
           }
-
-          // Load the new file in editor
           loadFile(pagePath);
-
-          log(`Successfully installed ${packageSpec}!`, 'hmr');
+          log(`Installed ${packageSpec}`, 'hmr');
           log(`Navigate to ${routePath} to see the demo.`);
-
         } catch (error) {
-          log(`Failed to install ${packageSpec}: ${error.message}`, 'error');
+          log(`Failed: ${error.message}`, 'error');
           console.error(error);
         } finally {
           installBtn.disabled = false;
@@ -771,23 +357,17 @@ export default function ${jsName.charAt(0).toUpperCase() + jsName.slice(1)}Demo(
       function updateFileTabs() {
         const tabs = useAppRouter ? appRouterTabs : pagesRouterTabs;
         fileTabsEl.innerHTML = tabs.map((tab, i) =>
-          `<button class="file-tab${i === 0 ? ' active' : ''}" data-file="${tab.file}">${tab.label}</button>`
+          `<button class="file-tab${i === 0 ? ' active' : ''}" data-file="${tab.file}"><span class="dot"></span>${tab.label}</button>`
         ).join('');
-
-        // Load first file
         currentFile = tabs[0].file;
         loadFile(currentFile);
       }
 
       function loadFile(path) {
         if (!vfs) return;
-
         try {
-          const content = vfs.readFileSync(path, 'utf8');
-          editorEl.value = content;
+          editorEl.value = vfs.readFileSync(path, 'utf8');
           currentFile = path;
-
-          // Update active tab
           document.querySelectorAll('.file-tab').forEach((tab) => {
             tab.classList.toggle('active', tab.dataset.file === path);
           });
@@ -798,54 +378,32 @@ export default function ${jsName.charAt(0).toUpperCase() + jsName.slice(1)}Demo(
 
       function saveFile() {
         if (!vfs || !currentFile) return;
-
         try {
           vfs.writeFileSync(currentFile, editorEl.value);
           log(`Saved: ${currentFile}`);
         } catch (e) {
-          log(`Error saving ${currentFile}: ${e.message}`, 'error');
+          log(`Error saving: ${e.message}`, 'error');
         }
       }
 
       function updatePreview() {
         if (!previewActive || !devServerUrl) return;
-
-        // Set up HMR target when iframe reloads
         previewFrame.onload = () => {
-          if (devServer && previewFrame.contentWindow) {
-            devServer.setHMRTarget(previewFrame.contentWindow);
-          }
+          if (devServer && previewFrame.contentWindow) devServer.setHMRTarget(previewFrame.contentWindow);
         };
-
-        // Force iframe refresh by adding timestamp
-        const url = devServerUrl + '?t=' + Date.now();
-        previewFrame.src = url;
+        previewFrame.src = devServerUrl + '?t=' + Date.now();
       }
 
       function navigateToPath(path) {
         if (!previewActive || !devServerUrl) {
-          log('Preview not running. Click "Start Preview" first.', 'error');
+          log('Preview not running.', 'error');
           return;
         }
-
-        // Ensure path starts with /
-        if (!path.startsWith('/')) {
-          path = '/' + path;
-        }
-
-        // Remove leading slash since devServerUrl already ends with /
-        const pathWithoutLeadingSlash = path.substring(1);
-
-        // Append path to devServerUrl (which already includes /__virtual__/port/)
-        const fullUrl = devServerUrl + pathWithoutLeadingSlash;
-
-        // Re-register HMR target after navigation
+        if (!path.startsWith('/')) path = '/' + path;
+        const fullUrl = devServerUrl + path.substring(1);
         previewFrame.onload = () => {
-          if (devServer && previewFrame.contentWindow) {
-            devServer.setHMRTarget(previewFrame.contentWindow);
-          }
+          if (devServer && previewFrame.contentWindow) devServer.setHMRTarget(previewFrame.contentWindow);
         };
-
         log(`Navigating to: ${path}`);
         previewFrame.src = fullUrl;
         urlInput.value = path;
@@ -855,35 +413,24 @@ export default function ${jsName.charAt(0).toUpperCase() + jsName.slice(1)}Demo(
         previewPlaceholder.style.display = 'none';
         previewFrame.style.display = 'block';
         previewActive = true;
-
         if (devServerUrl) {
-          // Set up HMR target when iframe loads
           previewFrame.onload = () => {
             if (devServer && previewFrame.contentWindow) {
               devServer.setHMRTarget(previewFrame.contentWindow);
-              log('HMR target connected to iframe', 'hmr');
+              log('HMR target connected', 'hmr');
             }
           };
-
           previewFrame.src = devServerUrl;
           urlInput.value = '/';
         }
-
-        log('Preview started!');
-        log('Edit a file and save to see HMR in action', 'hmr');
+        log('Preview started');
+        log('Edit and save to trigger HMR', 'hmr');
       }
 
-      // Initialize
       async function init() {
         try {
           setStatus('', 'Initializing...');
-
-          // Reset state
-          if (devServer) {
-            devServer.stop();
-            devServer = null;
-            devServerUrl = null;
-          }
+          if (devServer) { devServer.stop(); devServer = null; devServerUrl = null; }
           previewActive = false;
           previewPlaceholder.style.display = 'flex';
           previewFrame.style.display = 'none';
@@ -891,77 +438,51 @@ export default function ${jsName.charAt(0).toUpperCase() + jsName.slice(1)}Demo(
           outputEl.innerHTML = '';
           urlInput.value = '/';
 
-          // Initialize based on router mode and worker setting
           const result = useAppRouter
             ? await initNextAppRouterDemo(outputEl, { useWorker })
             : await initNextDemo(outputEl, { useWorker });
 
           vfs = result.vfs;
           runtime = result.runtime;
-
-          // Create PackageManager
           packageManager = new PackageManager(vfs, { cwd: '/' });
-
-          // Reset installed packages
           installedPackages = new Set(['react', 'react-dom']);
           updateInstalledList();
 
-          // Set up file watcher for HMR
           const watchDir = useAppRouter ? '/app' : '/pages';
           vfs.watch(watchDir, { recursive: true }, (eventType, filename) => {
-            if (eventType === 'change' && previewActive) {
-              log(`File ${eventType}: ${filename}`);
-            }
+            if (eventType === 'change' && previewActive) log(`File ${eventType}: ${filename}`);
           });
 
-          // Enable buttons
           saveBtn.disabled = false;
           runBtn.disabled = false;
-
-          // Update file tabs
           updateFileTabs();
-
           setStatus('running', 'Ready');
-          log('');
-          log(`Demo ready! Using ${useAppRouter ? 'App Router' : 'Pages Router'}.`);
-          log('Click "Start Preview" to launch the dev server.');
+          log(`Ready (${useAppRouter ? 'App Router' : 'Pages Router'})`);
+          log('Click Start Preview to launch.');
         } catch (e) {
           setStatus('error', 'Error');
-          log(`Initialization error: ${e.message}`, 'error');
+          log(`Init error: ${e.message}`, 'error');
           console.error(e);
         }
       }
 
-      // Start Preview using Service Worker-based dev server
       async function doStartPreview() {
         try {
           runBtn.disabled = true;
           setStatus('', 'Starting dev server...');
-
-          // Start the dev server with Service Worker
-          const result = await startNextDevServer(vfs, {
-            port: 3001,
-            log: log,
-          });
-
+          const result = await startNextDevServer(vfs, { port: 3001, log });
           devServer = result.server;
           devServerUrl = result.url;
-
-          log(`Dev server URL: ${devServerUrl}`);
-
-          // Listen for HMR updates
+          log(`Dev server: ${devServerUrl}`);
           devServer.on('hmr-update', (update) => {
             log(`HMR: ${update.path}`, 'hmr');
             showHmrIndicator();
           });
-
-          // Start the preview
           await startPreview();
-
           setStatus('running', 'Dev server running');
         } catch (e) {
           setStatus('error', 'Preview failed');
-          log(`Preview error: ${e.message}`, 'error');
+          log(`Error: ${e.message}`, 'error');
           console.error(e);
           runBtn.disabled = false;
         }
@@ -969,115 +490,59 @@ export default function ${jsName.charAt(0).toUpperCase() + jsName.slice(1)}Demo(
 
       // Event listeners
       saveBtn.addEventListener('click', saveFile);
-
-      clearBtn.addEventListener('click', () => {
-        outputEl.innerHTML = '';
-      });
-
-      refreshBtn.addEventListener('click', () => {
-        if (previewActive) {
-          log('Refreshing preview...');
-          updatePreview();
-        }
-      });
-
+      clearBtn.addEventListener('click', () => { outputEl.innerHTML = ''; });
+      refreshBtn.addEventListener('click', () => { if (previewActive) { log('Refreshing...'); updatePreview(); } });
       runBtn.addEventListener('click', doStartPreview);
-
       fileTabsEl.addEventListener('click', (e) => {
-        if (e.target.classList.contains('file-tab')) {
-          loadFile(e.target.dataset.file);
-        }
+        const tab = e.target.closest('.file-tab');
+        if (tab) loadFile(tab.dataset.file);
       });
-
-      // Keyboard shortcut: Ctrl/Cmd + S to save
       editorEl.addEventListener('keydown', (e) => {
-        if ((e.ctrlKey || e.metaKey) && e.key === 's') {
-          e.preventDefault();
-          saveFile();
-        }
+        if ((e.ctrlKey || e.metaKey) && e.key === 's') { e.preventDefault(); saveFile(); }
       });
+      urlGoBtn.addEventListener('click', () => navigateToPath(urlInput.value));
+      urlInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') navigateToPath(urlInput.value); });
 
-      // URL bar navigation
-      urlGoBtn.addEventListener('click', () => {
-        navigateToPath(urlInput.value);
-      });
-
-      urlInput.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') {
-          navigateToPath(urlInput.value);
-        }
-      });
-
-      // Package installation
       installBtn.addEventListener('click', () => {
-        const packageSpec = packageInput.value.trim();
-        if (packageSpec) {
-          installPackage(packageSpec);
-          packageInput.value = '';
-        }
+        const s = packageInput.value.trim();
+        if (s) { installPackage(s); packageInput.value = ''; }
       });
-
       packageInput.addEventListener('keydown', (e) => {
         if (e.key === 'Enter') {
-          const packageSpec = packageInput.value.trim();
-          if (packageSpec) {
-            installPackage(packageSpec);
-            packageInput.value = '';
-          }
+          const s = packageInput.value.trim();
+          if (s) { installPackage(s); packageInput.value = ''; }
         }
       });
 
-      // CORS Proxy configuration
       function updateProxyStatus() {
         const proxy = getCorsProxy();
-        if (proxy) {
-          proxyStatus.textContent = proxy;
-          proxyStatus.style.color = '#22c55e';
-        } else {
-          proxyStatus.textContent = 'Not configured (direct fetch)';
-          proxyStatus.style.color = '#888';
-        }
+        proxyStatus.textContent = proxy || 'Not configured';
+        proxyStatus.style.color = proxy ? 'var(--accent)' : 'var(--text-dim)';
       }
-
       setProxyBtn.addEventListener('click', () => {
-        const proxyUrl = proxyInput.value.trim();
-        if (proxyUrl) {
-          setCorsProxy(proxyUrl);
-          updateProxyStatus();
-          log(`CORS proxy set: ${proxyUrl}`, 'hmr');
-        }
+        const u = proxyInput.value.trim();
+        if (u) { setCorsProxy(u); updateProxyStatus(); log(`Proxy set: ${u}`, 'hmr'); }
       });
-
       clearProxyBtn.addEventListener('click', () => {
-        setCorsProxy(null);
-        proxyInput.value = '';
-        updateProxyStatus();
-        log('CORS proxy cleared', 'hmr');
+        setCorsProxy(null); proxyInput.value = ''; updateProxyStatus(); log('Proxy cleared', 'hmr');
       });
-
       proxyInput.addEventListener('keydown', (e) => {
         if (e.key === 'Enter') {
-          const proxyUrl = proxyInput.value.trim();
-          if (proxyUrl) {
-            setCorsProxy(proxyUrl);
-            updateProxyStatus();
-            log(`CORS proxy set: ${proxyUrl}`, 'hmr');
-          }
+          const u = proxyInput.value.trim();
+          if (u) { setCorsProxy(u); updateProxyStatus(); log(`Proxy set: ${u}`, 'hmr'); }
         }
       });
 
-      // Router toggle buttons
       pagesRouterBtn.addEventListener('click', async () => {
-        if (!useAppRouter) return; // Already on Pages Router
+        if (!useAppRouter) return;
         useAppRouter = false;
         pagesRouterBtn.classList.add('active');
         appRouterBtn.classList.remove('active');
         log('Switching to Pages Router...');
         await init();
       });
-
       appRouterBtn.addEventListener('click', async () => {
-        if (useAppRouter) return; // Already on App Router
+        if (useAppRouter) return;
         useAppRouter = true;
         appRouterBtn.classList.add('active');
         pagesRouterBtn.classList.remove('active');
@@ -1085,19 +550,13 @@ export default function ${jsName.charAt(0).toUpperCase() + jsName.slice(1)}Demo(
         await init();
       });
 
-      // Worker toggle
       workerToggle.addEventListener('change', async () => {
         useWorker = workerToggle.checked;
         updateWorkerStatus();
-        log(`Web Worker mode: ${useWorker ? 'ENABLED' : 'DISABLED'}`, useWorker ? 'hmr' : '');
-        if (useWorker) {
-          log('Code execution will run in a separate Web Worker thread');
-          log('This keeps the UI responsive during heavy operations');
-        }
+        log(`Worker mode: ${useWorker ? 'ON' : 'OFF'}`, useWorker ? 'hmr' : '');
         await init();
       });
 
-      // Start initialization
       init();
     </script>
   </body>
