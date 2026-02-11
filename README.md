@@ -127,6 +127,34 @@ container.execute(`
 // Output: Hello world
 ```
 
+### Running Shell Commands
+
+```typescript
+import { createContainer } from 'almostnode';
+
+const container = createContainer();
+
+// Write a package.json with scripts
+container.vfs.writeFileSync('/package.json', JSON.stringify({
+  name: 'my-app',
+  scripts: {
+    build: 'echo Building...',
+    test: 'echo Tests passed!'
+  }
+}));
+
+// Run shell commands directly
+const result = await container.run('npm run build');
+console.log(result.stdout); // "Building..."
+
+await container.run('npm test');
+await container.run('echo hello && echo world');
+await container.run('ls /');
+```
+
+Supported npm commands: `npm run <script>`, `npm start`, `npm test`, `npm install`, `npm ls`.
+Pre/post lifecycle scripts (`prebuild`, `postbuild`, etc.) run automatically.
+
 ### With Next.js Dev Server
 
 ```typescript
