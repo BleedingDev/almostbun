@@ -1,11 +1,16 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import pako from 'pako';
 import { VirtualFS } from '../src/virtual-fs';
-import { importGitHubRepo, parseGitHubRepoUrl } from '../src/repo/github';
+import {
+  __clearGitHubArchiveCacheForTests,
+  importGitHubRepo,
+  parseGitHubRepoUrl,
+} from '../src/repo/github';
 
 describe('GitHub repo import helpers', () => {
   afterEach(() => {
     vi.restoreAllMocks();
+    __clearGitHubArchiveCacheForTests();
   });
 
   it('parses basic github repository URLs', () => {
@@ -634,6 +639,97 @@ describe('GitHub repo import helpers', () => {
       if (originalLocalStorage === undefined) delete (globalThis as any).localStorage;
       else (globalThis as any).localStorage = originalLocalStorage;
     }
+  });
+
+  it('reuses archive cache for repeated imports of the same repo/ref', async () => {
+    const originalCacheEnabled = process.env.ALMOSTBUN_ENABLE_ARCHIVE_CACHE;
+    process.env.ALMOSTBUN_ENABLE_ARCHIVE_CACHE = '1';
+
+    const firstVfs = new VirtualFS();
+    const secondVfs = new VirtualFS();
+    const archive = pako.gzip(
+      createMinimalTarball({
+        'package/package.json': '{"name":"cached-demo","version":"1.0.0"}',
+      })
+    );
+
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (url) => {
+      const urlStr = String(url);
+      if (urlStr === 'https://codeload.github.com/acme/demo/tar.gz/main') {
+        return new Response(archive, { status: 200 });
+      }
+      return new Response('not-found', { status: 404 });
+    });
+
+    try {
+      await importGitHubRepo(firstVfs, 'https://github.com/acme/demo/tree/main', {
+        destPath: '/project',
+      });
+      await importGitHubRepo(secondVfs, 'https://github.com/acme/demo/tree/main', {
+        destPath: '/project',
+      });
+    } finally {
+      if (originalCacheEnabled === undefined) {
+        delete process.env.ALMOSTBUN_ENABLE_ARCHIVE_CACHE;
+      } else {
+        process.env.ALMOSTBUN_ENABLE_ARCHIVE_CACHE = originalCacheEnabled;
+      }
+    }
+
+    expect(firstVfs.existsSync('/project/package.json')).toBe(true);
+    expect(secondVfs.existsSync('/project/package.json')).toBe(true);
+    const archiveCalls = fetchSpy.mock.calls.filter(
+      call => String(call[0]) === 'https://codeload.github.com/acme/demo/tar.gz/main'
+    );
+    expect(archiveCalls).toHaveLength(1);
+  });
+
+  it('can disable archive cache via ALMOSTBUN_ARCHIVE_CACHE_MAX_ENTRIES=0', async () => {
+    const originalCacheEnabled = process.env.ALMOSTBUN_ENABLE_ARCHIVE_CACHE;
+    const originalMaxEntries = process.env.ALMOSTBUN_ARCHIVE_CACHE_MAX_ENTRIES;
+    process.env.ALMOSTBUN_ENABLE_ARCHIVE_CACHE = '1';
+    process.env.ALMOSTBUN_ARCHIVE_CACHE_MAX_ENTRIES = '0';
+
+    const firstVfs = new VirtualFS();
+    const secondVfs = new VirtualFS();
+    const archive = pako.gzip(
+      createMinimalTarball({
+        'package/package.json': '{"name":"no-cache","version":"1.0.0"}',
+      })
+    );
+
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (url) => {
+      const urlStr = String(url);
+      if (urlStr === 'https://codeload.github.com/acme/demo/tar.gz/main') {
+        return new Response(archive, { status: 200 });
+      }
+      return new Response('not-found', { status: 404 });
+    });
+
+    try {
+      await importGitHubRepo(firstVfs, 'https://github.com/acme/demo/tree/main', {
+        destPath: '/project',
+      });
+      await importGitHubRepo(secondVfs, 'https://github.com/acme/demo/tree/main', {
+        destPath: '/project',
+      });
+    } finally {
+      if (originalCacheEnabled === undefined) {
+        delete process.env.ALMOSTBUN_ENABLE_ARCHIVE_CACHE;
+      } else {
+        process.env.ALMOSTBUN_ENABLE_ARCHIVE_CACHE = originalCacheEnabled;
+      }
+      if (originalMaxEntries === undefined) {
+        delete process.env.ALMOSTBUN_ARCHIVE_CACHE_MAX_ENTRIES;
+      } else {
+        process.env.ALMOSTBUN_ARCHIVE_CACHE_MAX_ENTRIES = originalMaxEntries;
+      }
+    }
+
+    const archiveCalls = fetchSpy.mock.calls.filter(
+      call => String(call[0]) === 'https://codeload.github.com/acme/demo/tar.gz/main'
+    );
+    expect(archiveCalls).toHaveLength(2);
   });
 });
 

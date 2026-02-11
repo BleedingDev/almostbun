@@ -160,7 +160,7 @@ async function runRepository(): Promise<void> {
     const bootstrap = await bootstrapGitHubProject(vfs, url, {
       destPath: '/project',
       includeDev: false,
-      includeOptional: true,
+      includeOptional: false,
       includeWorkspaces: true,
       preferPublishedWorkspacePackages: true,
       transform: true,

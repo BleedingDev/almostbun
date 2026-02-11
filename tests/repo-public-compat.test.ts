@@ -17,6 +17,56 @@ type RepoMatrixCase = {
 const CASE_TIMEOUT_MS = Number(process.env.PUBLIC_REPO_CASE_TIMEOUT_MS || 4 * 60 * 1000);
 const CASE_RETRIES = Math.max(1, Number(process.env.PUBLIC_REPO_CASE_RETRIES || 2));
 const CASE_RETRY_DELAY_MS = Math.max(0, Number(process.env.PUBLIC_REPO_CASE_RETRY_DELAY_MS || 300));
+const DEFAULT_CRAWL_LINKS_LIMIT = Math.max(0, Number(process.env.PUBLIC_REPO_CRAWL_LINKS_LIMIT || 8));
+const LOG_SCAN_TAIL = Math.max(10, Number(process.env.PUBLIC_REPO_LOG_SCAN_TAIL || 60));
+
+const FATAL_BODY_PATTERNS: RegExp[] = [
+  /\bReferenceError\b/i,
+  /\bTypeError\b/i,
+  /\bSyntaxError\b/i,
+  /\bCannot find module\b/i,
+  /\bModule not found\b/i,
+  /\bis not defined\b/i,
+  /\bFailed to compile\b/i,
+  /\bBuild failed\b/i,
+  /\bApplication error: a client-side exception has occurred\b/i,
+  /\bInternal Server Error\b/i,
+];
+
+const FATAL_LOG_PATTERNS: RegExp[] = [
+  /\bReferenceError\b/i,
+  /\bTypeError\b/i,
+  /\bSyntaxError\b/i,
+  /\bRangeError\b/i,
+  /\bUnhandled(?:Promise)?Rejection\b/i,
+  /\bCannot find module\b/i,
+  /\bModule not found\b/i,
+  /\bERR_MODULE_NOT_FOUND\b/i,
+  /\bis not defined\b/i,
+  /\bFailed to compile\b/i,
+  /\bBuild failed\b/i,
+  /\bError:\s+listen EADDRINUSE\b/i,
+];
+
+const BENIGN_LOG_PATTERNS: RegExp[] = [
+  /\bWarning:\s+Service Worker initialization failed\b/i,
+  /\bSourceMap\b/i,
+  /\bDeprecationWarning\b/i,
+];
+
+function findFatalLogs(logs: string[]): string[] {
+  const fatal: string[] = [];
+  for (const line of logs.slice(-LOG_SCAN_TAIL)) {
+    if (!FATAL_LOG_PATTERNS.some(pattern => pattern.test(line))) {
+      continue;
+    }
+    if (BENIGN_LOG_PATTERNS.some(pattern => pattern.test(line))) {
+      continue;
+    }
+    fatal.push(line);
+  }
+  return fatal;
+}
 
 const PUBLIC_REPO_MATRIX: RepoMatrixCase[] = [
   {
@@ -688,12 +738,17 @@ const PUBLIC_REPO_MATRIX: RepoMatrixCase[] = [
   },
 ];
 
-async function probeRunningApp(port: number, paths: string[]): Promise<{
+async function probeRunningApp(
+  port: number,
+  paths: string[],
+  crawlLinksLimit: number = DEFAULT_CRAWL_LINKS_LIMIT
+): Promise<{
   ok: boolean;
   statusCode: number;
   path: string;
   bodyPreview: string;
   crawledPaths: string[];
+  bodyErrorPattern?: string;
 }> {
   const bridge = getServerBridge();
   let lastStatus = 0;
@@ -713,6 +768,8 @@ async function probeRunningApp(port: number, paths: string[]): Promise<{
     );
     const body = response.body ? response.body.toString() : '';
     const bodyPreview = body.slice(0, 220);
+    const bodyForValidation = body.slice(0, 8000);
+    const bodyErrorPattern = FATAL_BODY_PATTERNS.find(pattern => pattern.test(bodyForValidation));
     const hasRedirectLocation =
       typeof response.headers?.location === 'string' &&
       response.headers.location.length > 0;
@@ -720,12 +777,14 @@ async function probeRunningApp(port: number, paths: string[]): Promise<{
       response.statusCode >= 200 &&
       response.statusCode < 400 &&
       (body.trim().length > 0 || hasRedirectLocation) &&
-      !/Cannot GET \//i.test(bodyPreview);
+      !/Cannot GET \//i.test(bodyPreview) &&
+      !bodyErrorPattern;
     return {
       ok,
       response,
       body,
       bodyPreview,
+      bodyErrorPattern: bodyErrorPattern?.source,
     };
   };
 
@@ -757,7 +816,7 @@ async function probeRunningApp(port: number, paths: string[]): Promise<{
     const firstProbe = await probeSinglePath(probePath);
 
     if (firstProbe.ok) {
-      const linksToProbe = extractLocalLinks(probePath, firstProbe.body).slice(0, 8);
+      const linksToProbe = extractLocalLinks(probePath, firstProbe.body).slice(0, crawlLinksLimit);
       const traversed = new Set<string>([probePath]);
       for (const linkPath of linksToProbe) {
         if (traversed.has(linkPath)) continue;
@@ -770,6 +829,7 @@ async function probeRunningApp(port: number, paths: string[]): Promise<{
             path: linkPath,
             bodyPreview: linkedProbe.bodyPreview,
             crawledPaths: [...traversed],
+            bodyErrorPattern: linkedProbe.bodyErrorPattern,
           };
         }
       }
@@ -780,6 +840,7 @@ async function probeRunningApp(port: number, paths: string[]): Promise<{
         path: probePath,
         bodyPreview: firstProbe.bodyPreview,
         crawledPaths,
+        bodyErrorPattern: firstProbe.bodyErrorPattern,
       };
     }
 
@@ -849,6 +910,7 @@ describe.skipIf(process.env.RUN_PUBLIC_REPO_MATRIX !== '1')('public repo compati
           if (attempt > 1) {
             console.log(`[matrix] retry ${repoCase.name} (attempt ${attempt}/${CASE_RETRIES})`);
           }
+          resetServerBridge();
 
           try {
             const started = await withTimeout(
@@ -873,18 +935,24 @@ describe.skipIf(process.env.RUN_PUBLIC_REPO_MATRIX !== '1')('public repo compati
             expect(started.detected.kind).toBe(repoCase.expectedKind);
 
             const probe = await withTimeout(
-              probeRunningApp(
-                running.port,
-                repoCase.probePaths || ['/', '/index.html']
-              ),
+            probeRunningApp(
+              running.port,
+              repoCase.probePaths || ['/', '/index.html'],
+              repoCase.crawlLinksLimit ?? DEFAULT_CRAWL_LINKS_LIMIT
+            ),
               30_000,
               `${repoCase.name} probe`
             );
 
             if (!probe.ok) {
               throw new Error(
-                `probe failed at ${probe.path} with status ${probe.statusCode}; body preview: ${probe.bodyPreview}; crawled: ${probe.crawledPaths.join(', ')}`
+                `probe failed at ${probe.path} with status ${probe.statusCode}; body preview: ${probe.bodyPreview}; body error pattern: ${probe.bodyErrorPattern || 'none'}; crawled: ${probe.crawledPaths.join(', ')}`
               );
+            }
+
+            const fatalLogs = findFatalLogs(logs);
+            if (fatalLogs.length > 0) {
+              throw new Error(`fatal runtime logs detected:\n${fatalLogs.slice(0, 10).join('\n')}`);
             }
 
             console.log(`[matrix] pass ${repoCase.name} (${started.detected.kind})`);

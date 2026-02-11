@@ -10,6 +10,21 @@ import { VirtualFS } from '../virtual-fs';
 import { extractTarball } from '../npm/tarball';
 import { fetchWithRetry } from '../npm/fetch';
 
+interface ArchiveCacheEntry {
+  archive: Uint8Array;
+  size: number;
+}
+
+type ArchiveCacheLimits = {
+  maxEntries: number;
+  maxBytes: number;
+};
+
+const DEFAULT_ARCHIVE_CACHE_MAX_ENTRIES = 8;
+const DEFAULT_ARCHIVE_CACHE_MAX_BYTES = 256 * 1024 * 1024;
+const archiveCache = new Map<string, ArchiveCacheEntry>();
+let archiveCacheTotalBytes = 0;
+
 export interface ParsedGitHubRepoUrl {
   owner: string;
   repo: string;
@@ -37,6 +52,111 @@ export interface ImportGitHubRepoResult {
 
 function normalizePathLike(value: string): string {
   return value.replace(/\\/g, '/');
+}
+
+function getRuntimeEnvValue(name: string): string | undefined {
+  try {
+    const runtimeProcess = (globalThis as typeof globalThis & {
+      process?: { env?: Record<string, string | undefined> };
+    }).process;
+    return runtimeProcess?.env?.[name];
+  } catch {
+    return undefined;
+  }
+}
+
+function readEnvNumber(name: string, fallback: number): number {
+  const raw = getRuntimeEnvValue(name);
+  if (raw == null) return fallback;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function isArchiveCacheEnabled(): boolean {
+  const envFlag = getRuntimeEnvValue('ALMOSTBUN_ENABLE_ARCHIVE_CACHE');
+  if (envFlag != null) {
+    return envFlag !== '0' && envFlag.toLowerCase() !== 'false';
+  }
+  return isBrowserRuntime();
+}
+
+function getArchiveCacheLimits(): ArchiveCacheLimits {
+  if (!isArchiveCacheEnabled()) {
+    return {
+      maxEntries: 0,
+      maxBytes: 0,
+    };
+  }
+
+  return {
+    maxEntries: Math.max(0, Math.floor(readEnvNumber('ALMOSTBUN_ARCHIVE_CACHE_MAX_ENTRIES', DEFAULT_ARCHIVE_CACHE_MAX_ENTRIES))),
+    maxBytes: Math.max(0, Math.floor(readEnvNumber('ALMOSTBUN_ARCHIVE_CACHE_MAX_BYTES', DEFAULT_ARCHIVE_CACHE_MAX_BYTES))),
+  };
+}
+
+function cloneArchiveBuffer(source: Uint8Array): ArrayBuffer {
+  const copy = new Uint8Array(source.length);
+  copy.set(source);
+  return copy.buffer;
+}
+
+function getCachedArchive(cacheKey: string): ArrayBuffer | null {
+  const entry = archiveCache.get(cacheKey);
+  if (!entry) {
+    return null;
+  }
+
+  // LRU-ish behavior: move recently used key to the tail.
+  archiveCache.delete(cacheKey);
+  archiveCache.set(cacheKey, entry);
+  return cloneArchiveBuffer(entry.archive);
+}
+
+function evictArchiveCacheIfNeeded(limits: ArchiveCacheLimits): void {
+  while (
+    archiveCache.size > limits.maxEntries ||
+    archiveCacheTotalBytes > limits.maxBytes
+  ) {
+    const oldestKey = archiveCache.keys().next().value as string | undefined;
+    if (!oldestKey) {
+      break;
+    }
+    const oldestEntry = archiveCache.get(oldestKey);
+    archiveCache.delete(oldestKey);
+    if (oldestEntry) {
+      archiveCacheTotalBytes = Math.max(0, archiveCacheTotalBytes - oldestEntry.size);
+    }
+  }
+}
+
+function cacheArchive(cacheKey: string, archive: ArrayBuffer): void {
+  const limits = getArchiveCacheLimits();
+  if (limits.maxEntries <= 0 || limits.maxBytes <= 0) {
+    return;
+  }
+
+  const bytes = new Uint8Array(archive);
+  const size = bytes.byteLength;
+  if (size === 0 || size > limits.maxBytes) {
+    return;
+  }
+
+  const existing = archiveCache.get(cacheKey);
+  if (existing) {
+    archiveCacheTotalBytes = Math.max(0, archiveCacheTotalBytes - existing.size);
+    archiveCache.delete(cacheKey);
+  }
+
+  const cached = new Uint8Array(size);
+  cached.set(bytes);
+  archiveCache.set(cacheKey, { archive: cached, size });
+  archiveCacheTotalBytes += size;
+  evictArchiveCacheIfNeeded(limits);
+}
+
+export function __clearGitHubArchiveCacheForTests(): void {
+  archiveCache.clear();
+  archiveCacheTotalBytes = 0;
 }
 
 function parseGitHubShorthand(input: string): ParsedGitHubRepoUrl | null {
@@ -416,6 +536,7 @@ export async function importGitHubRepo(
   const repo = parseGitHubRepoUrl(repoUrl);
   const destPath = options.destPath || '/project';
   const projectPath = repo.subdir ? path.join(destPath, repo.subdir) : destPath;
+  const archiveCacheKey = repo.archiveUrl;
 
   const fetchArchive = async (archiveUrl: string): Promise<Response> => {
     return fetchWithRetry(
@@ -435,13 +556,18 @@ export async function importGitHubRepo(
 
   let response: Response | null = null;
   let directError: unknown;
-  try {
-    response = await fetchArchive(repo.archiveUrl);
-  } catch (error) {
-    directError = error;
+  let archiveBuffer = getCachedArchive(archiveCacheKey);
+  if (archiveBuffer) {
+    options.onProgress?.(`Using cached archive for ${repo.owner}/${repo.repo}@${repo.ref}`);
+  } else {
+    try {
+      response = await fetchArchive(repo.archiveUrl);
+    } catch (error) {
+      directError = error;
+    }
   }
 
-  if ((!response || !response.ok) && isBrowserRuntime()) {
+  if (!archiveBuffer && (!response || !response.ok) && isBrowserRuntime()) {
     const proxyCandidates = getBrowserCorsProxyCandidates();
     for (const proxyBase of proxyCandidates) {
       const proxiedUrl = buildProxyUrl(proxyBase, repo.archiveUrl);
@@ -457,7 +583,7 @@ export async function importGitHubRepo(
     }
   }
 
-  if (!response) {
+  if (!archiveBuffer && !response) {
     throw directError instanceof Error
       ? directError
       : new Error(`Failed to download GitHub archive: ${repo.archiveUrl}`);
@@ -465,10 +591,14 @@ export async function importGitHubRepo(
 
   let extractedFiles: string[] = [];
 
-  if (response.ok) {
-    const archive = await response.arrayBuffer();
+  if (!archiveBuffer && response?.ok) {
+    archiveBuffer = await response.arrayBuffer();
+    cacheArchive(archiveCacheKey, archiveBuffer);
+  }
+
+  if (archiveBuffer) {
     options.onProgress?.('Extracting archive...');
-    extractedFiles = extractTarball(archive, vfs, destPath, {
+    extractedFiles = extractTarball(archiveBuffer, vfs, destPath, {
       stripComponents: 1,
       onProgress: options.onProgress,
     });
