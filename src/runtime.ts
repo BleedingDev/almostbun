@@ -1349,6 +1349,41 @@ ${code}
     return httpErrorsShimCache;
   };
 
+  // Expose runtime-aware hooks to the standalone module shim so `require("module")`
+  // can resolve and load files using the active runtime/VFS.
+  if (typeof moduleShim.__setRuntimeHooks === 'function') {
+    moduleShim.__setRuntimeHooks({
+      createRequire: (filename: string) => {
+        const normalized = filename.startsWith('file://') ? filename.slice(7) : filename;
+        const fromDir = pathShim.dirname(normalized);
+        const runtimeRequire = createRequire(
+          vfs,
+          fsShim,
+          process,
+          fromDir,
+          moduleCache,
+          options,
+          processedCodeCache,
+          bun
+        );
+        runtimeRequire.cache = moduleCache;
+        return runtimeRequire as unknown as moduleShim.ModuleRequire;
+      },
+      resolve: (id: string, fromFilename: string) => {
+        const fromDir = pathShim.dirname(fromFilename);
+        return resolveModule(id, fromDir);
+      },
+      exists: (filename: string) => {
+        try {
+          return vfs.existsSync(filename) && vfs.statSync(filename).isFile();
+        } catch {
+          return false;
+        }
+      },
+      readFile: (filename: string) => vfs.readFileSync(filename, 'utf8'),
+    });
+  }
+
   const require: RequireFunction = (id: string): unknown => {
     // Handle node: protocol prefix (Node.js 16+)
     if (id.startsWith('node:')) {

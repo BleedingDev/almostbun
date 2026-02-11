@@ -49,8 +49,8 @@ describe('async_hooks module (Node.js compat)', () => {
       const resource = new AsyncResource('test');
       expect(typeof resource.asyncId()).toBe('number');
       expect(typeof resource.triggerAsyncId()).toBe('number');
-      assert.strictEqual(resource.asyncId(), 0);
-      assert.strictEqual(resource.triggerAsyncId(), 0);
+      expect(resource.asyncId()).toBeGreaterThan(0);
+      expect(resource.triggerAsyncId()).toBeGreaterThanOrEqual(0);
     });
 
     it('AsyncResource.bind should return same function identity', () => {
@@ -152,8 +152,8 @@ describe('async_hooks module (Node.js compat)', () => {
     });
   });
 
-  describe('known limitations (documented)', () => {
-    it.skip('should propagate AsyncLocalStorage context across timers/promises like Node', async () => {
+  describe('async propagation', () => {
+    it('should propagate AsyncLocalStorage context across timers/promises like Node', async () => {
       const als = new AsyncLocalStorage<{ id: string }>();
       let observed: string | undefined;
       await als.run({ id: 'ctx' }, async () => {
@@ -163,7 +163,7 @@ describe('async_hooks module (Node.js compat)', () => {
       expect(observed).toBe('ctx');
     });
 
-    it.skip('createHook callbacks should fire around async lifecycle events', () => {
+    it('createHook callbacks should fire around async lifecycle events', () => {
       let initCalled = false;
       const hook = createHook({ init() { initCalled = true; } }).enable();
       Promise.resolve().then(() => undefined);

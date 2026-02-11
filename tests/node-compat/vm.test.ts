@@ -155,19 +155,19 @@ describe('vm module (Node.js compat)', () => {
     });
   });
 
-  describe('known limitations (documented)', () => {
-    it.skip('should isolate sandbox from outer globals like Node vm contexts', () => {
+  describe('context behavior', () => {
+    it('should isolate sandbox from outer globals like Node vm contexts', () => {
       const context = vm.createContext({});
       vm.runInContext('globalThis.__vm_leak_test__ = 1', context);
       expect((globalThis as Record<string, unknown>).__vm_leak_test__).toBeUndefined();
     });
 
-    it.skip('should support timeout option for script execution', () => {
+    it('should support timeout option for script execution', () => {
       const script = new vm.Script('while (true) {}');
       expect(() => script.runInThisContext({ timeout: 10 })).toThrow();
     });
 
-    it.skip('should persist assignment to primitive bindings back into context', () => {
+    it('should persist assignment to primitive bindings back into context', () => {
       const context = vm.createContext({ x: 1 });
       vm.runInContext('x = 2', context);
       expect((context as { x: number }).x).toBe(2);

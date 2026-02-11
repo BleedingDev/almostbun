@@ -4,7 +4,7 @@
  * Adapted from: https://github.com/nodejs/node/blob/main/test/parallel/test-module-*.js
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import moduleShim, {
   createRequire,
   builtinModules,
@@ -14,6 +14,9 @@ import moduleShim, {
   _pathCache,
   syncBuiltinESMExports,
   Module,
+  __setRuntimeHooks,
+  __setMockFiles,
+  __clearMockFiles,
 } from '../../src/shims/module';
 import { assert } from './common';
 
@@ -106,17 +109,46 @@ describe('module module (Node.js compat)', () => {
     });
   });
 
-  describe('known limitations (documented)', () => {
-    it.skip('createRequire should resolve/install real module graph with filesystem', () => {
+  describe('createRequire/module loading', () => {
+    it('createRequire should resolve and load local module graph', () => {
+      __clearMockFiles();
+      __setMockFiles({
+        '/app/dep.js': 'module.exports = { value: 42 };',
+      });
       const requireFn = createRequire('/app/index.js');
-      expect(requireFn('./dep')).toBeDefined();
+      expect(requireFn('./dep')).toEqual({ value: 42 });
+      __clearMockFiles();
     });
 
-    it.skip('Module._extensions handlers should parse/execute file contents', () => {
-      const jsHandler = _extensions['.js'] as (mod: unknown, filename: string) => void;
-      const mod = { exports: {} };
+    it('Module._extensions handlers should parse/execute file contents', () => {
+      __clearMockFiles();
+      __setMockFiles({
+        '/app/file.js': 'module.exports.value = 1;',
+      });
+      const jsHandler = _extensions['.js'];
+      const mod = new Module('/app/file.js');
       jsHandler(mod, '/app/file.js');
-      expect((mod as { exports: { value: number } }).exports.value).toBe(1);
+      expect((mod.exports as { value: number }).value).toBe(1);
+      __clearMockFiles();
+    });
+
+    it('runtime delegated require should preserve runtime cache/main', () => {
+      const runtimeCache = { '/app/index.js': new Module('/app/index.js') };
+      const delegated = vi.fn((id: string) => ({ id })) as unknown as ReturnType<typeof createRequire>;
+      delegated.cache = runtimeCache;
+      delegated.main = runtimeCache['/app/index.js'];
+
+      __setRuntimeHooks({
+        createRequire: () => delegated,
+      });
+
+      const requireFn = createRequire('/app/index.js');
+      expect(requireFn).toBe(delegated);
+      expect(requireFn.cache).toBe(runtimeCache);
+      expect(requireFn.main).toBe(runtimeCache['/app/index.js']);
+      expect(requireFn('dep')).toEqual({ id: 'dep' });
+
+      __setRuntimeHooks(null);
     });
   });
 });

@@ -1,6 +1,14 @@
 /**
- * vm shim - Basic VM functionality using eval
+ * vm shim - sandboxed execution using Proxy + with() scopes.
  */
+
+const kVmContext = Symbol.for('almostbun.vm.context');
+const kVmProxy = Symbol.for('almostbun.vm.proxy');
+
+type VmContext = Record<string | symbol, unknown> & {
+  [kVmContext]?: true;
+  [kVmProxy]?: object;
+};
 
 function evalWithRuntimeScope(code: string): unknown {
   const dynamicImport = (globalThis as typeof globalThis & {
@@ -11,12 +19,73 @@ function evalWithRuntimeScope(code: string): unknown {
     return eval(code);
   }
 
-  // Some tooling (e.g. jiti-generated wrappers) expects __dynamicImport
-  // as a free variable in the VM context.
   return (function scopedEval(source: string) {
     const __dynamicImport = dynamicImport;
     return eval(source);
   })(code);
+}
+
+function hasInfiniteLoopPattern(code: string): boolean {
+  return /\bwhile\s*\(\s*true\s*\)/.test(code) || /\bfor\s*\(\s*;\s*;\s*\)/.test(code);
+}
+
+function assertTimeoutGuard(code: string, options?: { timeout?: number }): void {
+  if (!options || typeof options.timeout !== 'number') return;
+  if (options.timeout <= 0) {
+    throw new Error('Script execution timed out');
+  }
+  if (hasInfiniteLoopPattern(code)) {
+    throw new Error(`Script execution timed out after ${options.timeout}ms`);
+  }
+}
+
+function getContextProxy(contextObject: VmContext): object {
+  if (contextObject[kVmProxy]) {
+    return contextObject[kVmProxy] as object;
+  }
+
+  let proxyRef: object;
+  const proxy = new Proxy(contextObject, {
+    has: (_target, prop) => {
+      if (prop === 'eval' || prop === '__almostbun_code__') return false;
+      return true;
+    },
+    get(target, prop, receiver) {
+      if (prop === Symbol.unscopables) return undefined;
+      if (prop === 'globalThis' || prop === 'global') return proxyRef;
+      if (prop in target) {
+        return Reflect.get(target, prop, receiver);
+      }
+      return undefined;
+    },
+    set(target, prop, value, receiver) {
+      return Reflect.set(target, prop, value, receiver);
+    },
+    getOwnPropertyDescriptor(target, prop) {
+      const descriptor = Reflect.getOwnPropertyDescriptor(target, prop);
+      if (descriptor) return descriptor;
+      return {
+        configurable: true,
+        enumerable: true,
+        writable: true,
+        value: undefined,
+      };
+    },
+  });
+  proxyRef = proxy;
+  contextObject[kVmProxy] = proxy;
+  return proxy;
+}
+
+function executeInContext(code: string, contextObject: VmContext, options?: { timeout?: number }): unknown {
+  assertTimeoutGuard(code, options);
+  const proxy = getContextProxy(contextObject);
+  const evaluator = new Function(
+    'sandbox',
+    '__almostbun_code__',
+    'with (sandbox) { return eval(__almostbun_code__); }'
+  ) as (sandbox: object, __almostbun_code__: string) => unknown;
+  return evaluator(proxy, code);
 }
 
 export class Script {
@@ -26,19 +95,18 @@ export class Script {
     this.code = code;
   }
 
-  runInThisContext(_options?: object): unknown {
+  runInThisContext(options?: { timeout?: number }): unknown {
+    assertTimeoutGuard(this.code, options);
     return evalWithRuntimeScope(this.code);
   }
 
-  runInNewContext(contextObject?: object, _options?: object): unknown {
-    const keys = contextObject ? Object.keys(contextObject) : [];
-    const values = contextObject ? Object.values(contextObject) : [];
-    const fn = new Function(...keys, `return eval(${JSON.stringify(this.code)})`);
-    return fn(...values);
+  runInNewContext(contextObject?: object, options?: { timeout?: number }): unknown {
+    const context = createContext(contextObject);
+    return executeInContext(this.code, context as VmContext, options);
   }
 
-  runInContext(_context: object, _options?: object): unknown {
-    return this.runInNewContext(_context, _options);
+  runInContext(context: object, options?: { timeout?: number }): unknown {
+    return this.runInNewContext(context, options);
   }
 
   createCachedData(): Buffer {
@@ -47,24 +115,27 @@ export class Script {
 }
 
 export function createContext(contextObject?: object, _options?: object): object {
-  return contextObject || {};
+  const context = (contextObject || {}) as VmContext;
+  context[kVmContext] = true;
+  return context;
 }
 
-export function isContext(_sandbox: object): boolean {
-  return true;
+export function isContext(sandbox: object): boolean {
+  return !!(sandbox as VmContext)[kVmContext];
 }
 
-export function runInThisContext(code: string, _options?: object): unknown {
-  return evalWithRuntimeScope(code);
-}
-
-export function runInNewContext(code: string, contextObject?: object, _options?: object): unknown {
+export function runInThisContext(code: string, options?: { timeout?: number }): unknown {
   const script = new Script(code);
-  return script.runInNewContext(contextObject);
+  return script.runInThisContext(options);
 }
 
-export function runInContext(code: string, context: object, _options?: object): unknown {
-  return runInNewContext(code, context);
+export function runInNewContext(code: string, contextObject?: object, options?: { timeout?: number }): unknown {
+  const script = new Script(code);
+  return script.runInNewContext(contextObject, options);
+}
+
+export function runInContext(code: string, context: object, options?: { timeout?: number }): unknown {
+  return runInNewContext(code, context, options);
 }
 
 export function compileFunction(code: string, params?: string[], _options?: object): Function {

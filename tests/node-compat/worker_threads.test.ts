@@ -138,6 +138,17 @@ describe('worker_threads module (Node.js compat)', () => {
       expect(channel.port2).toBeInstanceOf(MessagePort);
       expect(channel.port1).not.toBe(channel.port2);
     });
+
+    it('should not return already delivered messages via receiveMessageOnPort', async () => {
+      const channel = new MessageChannel();
+      const onMessage = vi.fn();
+      channel.port2.on('message', onMessage);
+      channel.port1.postMessage({ once: true });
+
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(onMessage).toHaveBeenCalledWith({ once: true });
+      expect(receiveMessageOnPort(channel.port2)).toBeUndefined();
+    });
   });
 
   describe('BroadcastChannel', () => {
@@ -159,6 +170,17 @@ describe('worker_threads module (Node.js compat)', () => {
       assert.doesNotThrow(() => channel.close());
       assert.doesNotThrow(() => channel.ref());
       assert.doesNotThrow(() => channel.unref());
+    });
+
+    it('postMessage should also deliver to sender channel', async () => {
+      const channel = new BroadcastChannel('loopback');
+      const onMessage = vi.fn();
+      channel.on('message', onMessage);
+
+      channel.postMessage({ self: true });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(onMessage).toHaveBeenCalledWith({ self: true });
+      channel.close();
     });
   });
 
@@ -184,7 +206,7 @@ describe('worker_threads module (Node.js compat)', () => {
 
     it('environment data accessors should be callable', () => {
       assert.doesNotThrow(() => setEnvironmentData('key', 'value'));
-      assert.strictEqual(getEnvironmentData('key'), undefined);
+      assert.strictEqual(getEnvironmentData('key'), 'value');
     });
   });
 
@@ -197,8 +219,8 @@ describe('worker_threads module (Node.js compat)', () => {
     });
   });
 
-  describe('known limitations (documented)', () => {
-    it.skip('should execute code in a separate thread and exchange messages', async () => {
+  describe('message behavior', () => {
+    it('should execute code in a separate thread and exchange messages', async () => {
       const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
       const worker = new Worker('worker.js');
       const onMessage = vi.fn();
@@ -209,7 +231,7 @@ describe('worker_threads module (Node.js compat)', () => {
       warnSpy.mockRestore();
     });
 
-    it.skip('receiveMessageOnPort should return queued message payloads', () => {
+    it('receiveMessageOnPort should return queued message payloads', () => {
       const channel = new MessageChannel();
       channel.port1.postMessage({ hello: 'world' });
       expect(receiveMessageOnPort(channel.port2)).toEqual({ message: { hello: 'world' } });
