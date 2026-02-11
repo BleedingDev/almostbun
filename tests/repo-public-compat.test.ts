@@ -15,6 +15,8 @@ type RepoMatrixCase = {
 };
 
 const CASE_TIMEOUT_MS = Number(process.env.PUBLIC_REPO_CASE_TIMEOUT_MS || 4 * 60 * 1000);
+const CASE_RETRIES = Math.max(1, Number(process.env.PUBLIC_REPO_CASE_RETRIES || 2));
+const CASE_RETRY_DELAY_MS = Math.max(0, Number(process.env.PUBLIC_REPO_CASE_RETRY_DELAY_MS || 300));
 
 const PUBLIC_REPO_MATRIX: RepoMatrixCase[] = [
   {
@@ -813,6 +815,11 @@ async function withTimeout<T>(work: Promise<T>, timeoutMs: number, label: string
   }
 }
 
+async function sleep(ms: number): Promise<void> {
+  if (ms <= 0) return;
+  await new Promise<void>(resolve => setTimeout(resolve, ms));
+}
+
 describe.skipIf(process.env.RUN_PUBLIC_REPO_MATRIX !== '1')('public repo compatibility matrix', () => {
   it(
     'bootstraps and serves public GitHub repos',
@@ -832,60 +839,81 @@ describe.skipIf(process.env.RUN_PUBLIC_REPO_MATRIX !== '1')('public repo compati
       }
 
       for (const repoCase of matrix) {
-        let running: Awaited<ReturnType<typeof bootstrapAndRunGitHubProject>>['running'] | undefined;
-        const logs: string[] = [];
+        const attemptErrors: string[] = [];
+        let passed = false;
         console.log(`[matrix] start ${repoCase.name}`);
 
-        try {
-          const started = await withTimeout(
-            bootstrapAndRunGitHubProject(repoCase.url, {
-              skipInstall: repoCase.skipInstall,
-              initServiceWorker: false,
-              includeDev: repoCase.includeDev,
-              transformProjectSources: repoCase.transformProjectSources,
-              serverReadyTimeoutMs: repoCase.serverReadyTimeoutMs ?? 45_000,
-              onProgress: (message) => {
-                logs.push(`[progress] ${message}`);
-              },
-              log: (message) => {
-                logs.push(message);
-              },
-            }),
-            CASE_TIMEOUT_MS,
-            repoCase.name
-          );
-
-          running = started.running;
-          expect(started.detected.kind).toBe(repoCase.expectedKind);
-
-          const probe = await withTimeout(
-            probeRunningApp(
-              running.port,
-              repoCase.probePaths || ['/', '/index.html']
-            ),
-            30_000,
-            `${repoCase.name} probe`
-          );
-
-          if (!probe.ok) {
-            throw new Error(
-              `probe failed at ${probe.path} with status ${probe.statusCode}; body preview: ${probe.bodyPreview}; crawled: ${probe.crawledPaths.join(', ')}`
-            );
+        for (let attempt = 1; attempt <= CASE_RETRIES; attempt += 1) {
+          let running: Awaited<ReturnType<typeof bootstrapAndRunGitHubProject>>['running'] | undefined;
+          const logs: string[] = [];
+          if (attempt > 1) {
+            console.log(`[matrix] retry ${repoCase.name} (attempt ${attempt}/${CASE_RETRIES})`);
           }
 
-          console.log(`[matrix] pass ${repoCase.name} (${started.detected.kind})`);
-        } catch (error) {
-          failures.push(
-            `[${repoCase.name}] ${repoCase.url}\nerror: ${String(error)}\nrecent logs:\n${logs.slice(-25).join('\n')}`
-          );
-          console.log(`[matrix] fail ${repoCase.name}: ${String(error)}`);
-        } finally {
           try {
-            running?.stop();
-          } catch {
-            // ignore cleanup issues and continue
+            const started = await withTimeout(
+              bootstrapAndRunGitHubProject(repoCase.url, {
+                skipInstall: repoCase.skipInstall,
+                initServiceWorker: false,
+                includeDev: repoCase.includeDev,
+                transformProjectSources: repoCase.transformProjectSources,
+                serverReadyTimeoutMs: repoCase.serverReadyTimeoutMs ?? 45_000,
+                onProgress: (message) => {
+                  logs.push(`[progress] ${message}`);
+                },
+                log: (message) => {
+                  logs.push(message);
+                },
+              }),
+              CASE_TIMEOUT_MS,
+              repoCase.name
+            );
+
+            running = started.running;
+            expect(started.detected.kind).toBe(repoCase.expectedKind);
+
+            const probe = await withTimeout(
+              probeRunningApp(
+                running.port,
+                repoCase.probePaths || ['/', '/index.html']
+              ),
+              30_000,
+              `${repoCase.name} probe`
+            );
+
+            if (!probe.ok) {
+              throw new Error(
+                `probe failed at ${probe.path} with status ${probe.statusCode}; body preview: ${probe.bodyPreview}; crawled: ${probe.crawledPaths.join(', ')}`
+              );
+            }
+
+            console.log(`[matrix] pass ${repoCase.name} (${started.detected.kind})`);
+            passed = true;
+            break;
+          } catch (error) {
+            const renderedError = String(error);
+            attemptErrors.push(
+              `attempt ${attempt}/${CASE_RETRIES}: ${renderedError}\nrecent logs:\n${logs.slice(-25).join('\n')}`
+            );
+            console.log(`[matrix] fail ${repoCase.name} attempt ${attempt}/${CASE_RETRIES}: ${renderedError}`);
+          } finally {
+            try {
+              running?.stop();
+            } catch {
+              // ignore cleanup issues and continue
+            }
+            resetServerBridge();
           }
-          resetServerBridge();
+
+          if (!passed && attempt < CASE_RETRIES) {
+            await sleep(CASE_RETRY_DELAY_MS * attempt);
+          }
+        }
+
+        if (!passed) {
+          failures.push(
+            `[${repoCase.name}] ${repoCase.url}\n${attemptErrors.join('\n\n')}`
+          );
         }
       }
 
