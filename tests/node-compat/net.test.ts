@@ -303,7 +303,7 @@ describe('net module (Node.js compat)', () => {
       server.listen(0, '127.0.0.1');
     });
 
-    it.skip('should enforce strict IPv4 segment validation like Node', () => {
+    it('should enforce strict IPv4 segment validation like Node', () => {
       assert.strictEqual(isIP('999.999.999.999'), 0);
     });
   });

@@ -346,12 +346,25 @@ export function createConnection(
 
 export const connect = createConnection;
 
+function isStrictIPv4(input: string): boolean {
+  const parts = input.split('.');
+  if (parts.length !== 4) return false;
+
+  for (const part of parts) {
+    if (part.length === 0 || part.length > 3) return false;
+    if (!/^\d+$/.test(part)) return false;
+    if (part.length > 1 && part.startsWith('0')) return false;
+    const value = Number.parseInt(part, 10);
+    if (!Number.isFinite(value) || value < 0 || value > 255) return false;
+  }
+
+  return true;
+}
+
 export function isIP(input: string): number {
-  // Simple IPv4 check
-  if (/^(\d{1,3}\.){3}\d{1,3}$/.test(input)) {
+  if (isStrictIPv4(input)) {
     return 4;
   }
-  // Simple IPv6 check
   if (/^([0-9a-fA-F]{0,4}:){2,7}[0-9a-fA-F]{0,4}$/.test(input)) {
     return 6;
   }
