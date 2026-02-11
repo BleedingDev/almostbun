@@ -684,6 +684,72 @@ describe('GitHub repo import helpers', () => {
     expect(archiveCalls).toHaveLength(1);
   });
 
+  it('reuses persistent archive cache after in-memory cache reset in browser mode', async () => {
+    const originalWindow = (globalThis as any).window;
+    const originalDocument = (globalThis as any).document;
+    const originalLocalStorage = (globalThis as any).localStorage;
+    const originalCacheEnabled = process.env.ALMOSTBUN_ENABLE_ARCHIVE_CACHE;
+    const originalPersistentEnabled = process.env.ALMOSTBUN_ENABLE_PERSISTENT_ARCHIVE_CACHE;
+
+    process.env.ALMOSTBUN_ENABLE_ARCHIVE_CACHE = '1';
+    process.env.ALMOSTBUN_ENABLE_PERSISTENT_ARCHIVE_CACHE = '1';
+    (globalThis as any).window = {};
+    (globalThis as any).document = {};
+    (globalThis as any).localStorage = createStorageMock();
+
+    const firstVfs = new VirtualFS();
+    const secondVfs = new VirtualFS();
+    const archive = pako.gzip(
+      createMinimalTarball({
+        'package/package.json': '{"name":"persistent-demo","version":"1.0.0"}',
+      })
+    );
+
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (url) => {
+      const urlStr = String(url);
+      if (urlStr === 'https://codeload.github.com/acme/demo/tar.gz/main') {
+        return new Response(archive, { status: 200 });
+      }
+      return new Response('not-found', { status: 404 });
+    });
+
+    try {
+      await importGitHubRepo(firstVfs, 'https://github.com/acme/demo/tree/main', {
+        destPath: '/project',
+      });
+
+      __clearGitHubArchiveCacheForTests();
+
+      await importGitHubRepo(secondVfs, 'https://github.com/acme/demo/tree/main', {
+        destPath: '/project',
+      });
+    } finally {
+      if (originalWindow === undefined) delete (globalThis as any).window;
+      else (globalThis as any).window = originalWindow;
+      if (originalDocument === undefined) delete (globalThis as any).document;
+      else (globalThis as any).document = originalDocument;
+      if (originalLocalStorage === undefined) delete (globalThis as any).localStorage;
+      else (globalThis as any).localStorage = originalLocalStorage;
+      if (originalCacheEnabled === undefined) {
+        delete process.env.ALMOSTBUN_ENABLE_ARCHIVE_CACHE;
+      } else {
+        process.env.ALMOSTBUN_ENABLE_ARCHIVE_CACHE = originalCacheEnabled;
+      }
+      if (originalPersistentEnabled === undefined) {
+        delete process.env.ALMOSTBUN_ENABLE_PERSISTENT_ARCHIVE_CACHE;
+      } else {
+        process.env.ALMOSTBUN_ENABLE_PERSISTENT_ARCHIVE_CACHE = originalPersistentEnabled;
+      }
+    }
+
+    expect(firstVfs.existsSync('/project/package.json')).toBe(true);
+    expect(secondVfs.existsSync('/project/package.json')).toBe(true);
+    const archiveCalls = fetchSpy.mock.calls.filter(
+      call => String(call[0]) === 'https://codeload.github.com/acme/demo/tar.gz/main'
+    );
+    expect(archiveCalls).toHaveLength(1);
+  });
+
   it('can disable archive cache via ALMOSTBUN_ARCHIVE_CACHE_MAX_ENTRIES=0', async () => {
     const originalCacheEnabled = process.env.ALMOSTBUN_ENABLE_ARCHIVE_CACHE;
     const originalMaxEntries = process.env.ALMOSTBUN_ARCHIVE_CACHE_MAX_ENTRIES;
@@ -732,6 +798,27 @@ describe('GitHub repo import helpers', () => {
     expect(archiveCalls).toHaveLength(2);
   });
 });
+
+function createStorageMock() {
+  const storage = new Map<string, string>();
+  return {
+    get length() {
+      return storage.size;
+    },
+    key(index: number): string | null {
+      return [...storage.keys()][index] ?? null;
+    },
+    getItem(key: string): string | null {
+      return storage.has(key) ? storage.get(key)! : null;
+    },
+    setItem(key: string, value: string): void {
+      storage.set(key, String(value));
+    },
+    removeItem(key: string): void {
+      storage.delete(key);
+    },
+  };
+}
 
 function createMinimalTarball(files: Record<string, string>): Uint8Array {
   const encoder = new TextEncoder();

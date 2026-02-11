@@ -9,6 +9,10 @@ import * as path from '../shims/path';
 import { VirtualFS } from '../virtual-fs';
 import { extractTarball } from '../npm/tarball';
 import { fetchWithRetry } from '../npm/fetch';
+import {
+  readPersistentBinaryCache,
+  writePersistentBinaryCache,
+} from '../cache/persistent-binary-cache';
 
 interface ArchiveCacheEntry {
   archive: Uint8Array;
@@ -22,6 +26,7 @@ type ArchiveCacheLimits = {
 
 const DEFAULT_ARCHIVE_CACHE_MAX_ENTRIES = 8;
 const DEFAULT_ARCHIVE_CACHE_MAX_BYTES = 256 * 1024 * 1024;
+const ARCHIVE_PERSISTENT_CACHE_NAMESPACE = 'github-archives';
 const archiveCache = new Map<string, ArchiveCacheEntry>();
 let archiveCacheTotalBytes = 0;
 
@@ -100,16 +105,72 @@ function cloneArchiveBuffer(source: Uint8Array): ArrayBuffer {
   return copy.buffer;
 }
 
-function getCachedArchive(cacheKey: string): ArrayBuffer | null {
+function isPersistentArchiveCacheEnabled(): boolean {
+  const envFlag = getRuntimeEnvValue('ALMOSTBUN_ENABLE_PERSISTENT_ARCHIVE_CACHE');
+  if (envFlag != null) {
+    return envFlag !== '0' && envFlag.toLowerCase() !== 'false';
+  }
+  return isBrowserRuntime();
+}
+
+function cacheArchiveInMemory(
+  cacheKey: string,
+  archive: ArrayBuffer | Uint8Array,
+  limits: ArchiveCacheLimits
+): void {
+  if (limits.maxEntries <= 0 || limits.maxBytes <= 0) {
+    return;
+  }
+
+  const bytes = archive instanceof Uint8Array ? archive : new Uint8Array(archive);
+  const size = bytes.byteLength;
+  if (size === 0 || size > limits.maxBytes) {
+    return;
+  }
+
+  const existing = archiveCache.get(cacheKey);
+  if (existing) {
+    archiveCacheTotalBytes = Math.max(0, archiveCacheTotalBytes - existing.size);
+    archiveCache.delete(cacheKey);
+  }
+
+  const cached = new Uint8Array(size);
+  cached.set(bytes);
+  archiveCache.set(cacheKey, { archive: cached, size });
+  archiveCacheTotalBytes += size;
+  evictArchiveCacheIfNeeded(limits);
+}
+
+async function getCachedArchive(cacheKey: string): Promise<ArrayBuffer | null> {
   const entry = archiveCache.get(cacheKey);
-  if (!entry) {
+  if (entry) {
+    // LRU-ish behavior: move recently used key to the tail.
+    archiveCache.delete(cacheKey);
+    archiveCache.set(cacheKey, entry);
+    return cloneArchiveBuffer(entry.archive);
+  }
+
+  const limits = getArchiveCacheLimits();
+  if (
+    limits.maxEntries <= 0 ||
+    limits.maxBytes <= 0 ||
+    !isPersistentArchiveCacheEnabled()
+  ) {
     return null;
   }
 
-  // LRU-ish behavior: move recently used key to the tail.
-  archiveCache.delete(cacheKey);
-  archiveCache.set(cacheKey, entry);
-  return cloneArchiveBuffer(entry.archive);
+  const persisted = await readPersistentBinaryCache({
+    namespace: ARCHIVE_PERSISTENT_CACHE_NAMESPACE,
+    key: cacheKey,
+    maxEntries: limits.maxEntries,
+    maxBytes: limits.maxBytes,
+  });
+  if (!persisted) {
+    return null;
+  }
+
+  cacheArchiveInMemory(cacheKey, persisted, limits);
+  return cloneArchiveBuffer(new Uint8Array(persisted));
 }
 
 function evictArchiveCacheIfNeeded(limits: ArchiveCacheLimits): void {
@@ -129,29 +190,32 @@ function evictArchiveCacheIfNeeded(limits: ArchiveCacheLimits): void {
   }
 }
 
-function cacheArchive(cacheKey: string, archive: ArrayBuffer): void {
+async function cacheArchive(cacheKey: string, archive: ArrayBuffer): Promise<void> {
   const limits = getArchiveCacheLimits();
   if (limits.maxEntries <= 0 || limits.maxBytes <= 0) {
     return;
   }
 
   const bytes = new Uint8Array(archive);
-  const size = bytes.byteLength;
-  if (size === 0 || size > limits.maxBytes) {
+  if (bytes.byteLength === 0 || bytes.byteLength > limits.maxBytes) {
     return;
   }
 
-  const existing = archiveCache.get(cacheKey);
-  if (existing) {
-    archiveCacheTotalBytes = Math.max(0, archiveCacheTotalBytes - existing.size);
-    archiveCache.delete(cacheKey);
+  cacheArchiveInMemory(cacheKey, bytes, limits);
+
+  if (!isPersistentArchiveCacheEnabled()) {
+    return;
   }
 
-  const cached = new Uint8Array(size);
-  cached.set(bytes);
-  archiveCache.set(cacheKey, { archive: cached, size });
-  archiveCacheTotalBytes += size;
-  evictArchiveCacheIfNeeded(limits);
+  await writePersistentBinaryCache(
+    {
+      namespace: ARCHIVE_PERSISTENT_CACHE_NAMESPACE,
+      key: cacheKey,
+      maxEntries: limits.maxEntries,
+      maxBytes: limits.maxBytes,
+    },
+    bytes
+  );
 }
 
 export function __clearGitHubArchiveCacheForTests(): void {
@@ -556,7 +620,7 @@ export async function importGitHubRepo(
 
   let response: Response | null = null;
   let directError: unknown;
-  let archiveBuffer = getCachedArchive(archiveCacheKey);
+  let archiveBuffer = await getCachedArchive(archiveCacheKey);
   if (archiveBuffer) {
     options.onProgress?.(`Using cached archive for ${repo.owner}/${repo.repo}@${repo.ref}`);
   } else {
@@ -593,7 +657,7 @@ export async function importGitHubRepo(
 
   if (!archiveBuffer && response?.ok) {
     archiveBuffer = await response.arrayBuffer();
-    cacheArchive(archiveCacheKey, archiveBuffer);
+    await cacheArchive(archiveCacheKey, archiveBuffer);
   }
 
   if (archiveBuffer) {

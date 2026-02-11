@@ -8,7 +8,12 @@ import { getServerBridge, resetServerBridge } from '../src/server-bridge';
 const DEFAULT_FIXTURE_ROOT =
   '/Users/satan/side/experiments/modernjs/tests/integration/routes-tanstack-mf';
 const fixtureRoot = process.env.MODERNJS_MF_FIXTURE_ROOT || DEFAULT_FIXTURE_ROOT;
-const hasFixture = fs.existsSync(fixtureRoot);
+const hasFixture = [
+  fixtureRoot,
+  path.join(fixtureRoot, 'mf-host', 'dist', 'static'),
+  path.join(fixtureRoot, 'mf-remote', 'dist'),
+  path.join(fixtureRoot, 'mf-remote-2', 'dist'),
+].every((candidate) => fs.existsSync(candidate));
 
 function copyRealPathToVfs(vfs: VirtualFS, srcPath: string, destPath: string): void {
   const stat = fs.statSync(srcPath);

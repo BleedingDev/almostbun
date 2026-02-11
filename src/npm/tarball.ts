@@ -7,11 +7,17 @@ import pako from 'pako';
 import { VirtualFS } from '../virtual-fs';
 import * as path from '../shims/path';
 import { fetchWithRetry } from './fetch';
+import {
+  readPersistentBinaryCache,
+  writePersistentBinaryCache,
+} from '../cache/persistent-binary-cache';
 
 export interface ExtractOptions {
   stripComponents?: number; // Number of leading path components to strip (default: 1 for npm's "package/" prefix)
   filter?: (path: string) => boolean;
   onProgress?: (message: string) => void;
+  cacheKey?: string;
+  disableDownloadCache?: boolean;
 }
 
 interface TarEntry {
@@ -21,6 +27,193 @@ interface TarEntry {
   mode: number;
   content?: Uint8Array;
   linkTarget?: string;
+}
+
+type TarballCacheLimits = {
+  maxEntries: number;
+  maxBytes: number;
+};
+
+interface TarballCacheEntry {
+  tarball: Uint8Array;
+  size: number;
+}
+
+const DEFAULT_TARBALL_CACHE_MAX_ENTRIES = 96;
+const DEFAULT_TARBALL_CACHE_MAX_BYTES = 512 * 1024 * 1024;
+const TARBALL_PERSISTENT_CACHE_NAMESPACE = 'npm-tarballs';
+const tarballCache = new Map<string, TarballCacheEntry>();
+let tarballCacheTotalBytes = 0;
+
+function isBrowserRuntime(): boolean {
+  return typeof window !== 'undefined' && typeof document !== 'undefined';
+}
+
+function getRuntimeEnvValue(name: string): string | undefined {
+  try {
+    const runtimeProcess = (globalThis as typeof globalThis & {
+      process?: { env?: Record<string, string | undefined> };
+    }).process;
+    return runtimeProcess?.env?.[name];
+  } catch {
+    return undefined;
+  }
+}
+
+function readEnvNumber(name: string, fallback: number): number {
+  const raw = getRuntimeEnvValue(name);
+  if (raw == null) return fallback;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function isTarballCacheEnabled(): boolean {
+  const envFlag = getRuntimeEnvValue('ALMOSTBUN_ENABLE_TARBALL_CACHE');
+  if (envFlag != null) {
+    return envFlag !== '0' && envFlag.toLowerCase() !== 'false';
+  }
+  return isBrowserRuntime();
+}
+
+function isPersistentTarballCacheEnabled(): boolean {
+  const envFlag = getRuntimeEnvValue('ALMOSTBUN_ENABLE_PERSISTENT_TARBALL_CACHE');
+  if (envFlag != null) {
+    return envFlag !== '0' && envFlag.toLowerCase() !== 'false';
+  }
+  return isBrowserRuntime();
+}
+
+function getTarballCacheLimits(): TarballCacheLimits {
+  if (!isTarballCacheEnabled()) {
+    return {
+      maxEntries: 0,
+      maxBytes: 0,
+    };
+  }
+
+  return {
+    maxEntries: Math.max(
+      0,
+      Math.floor(readEnvNumber('ALMOSTBUN_TARBALL_CACHE_MAX_ENTRIES', DEFAULT_TARBALL_CACHE_MAX_ENTRIES))
+    ),
+    maxBytes: Math.max(
+      0,
+      Math.floor(readEnvNumber('ALMOSTBUN_TARBALL_CACHE_MAX_BYTES', DEFAULT_TARBALL_CACHE_MAX_BYTES))
+    ),
+  };
+}
+
+function cloneBuffer(source: Uint8Array): ArrayBuffer {
+  const copy = new Uint8Array(source.byteLength);
+  copy.set(source);
+  return copy.buffer;
+}
+
+function evictTarballCacheIfNeeded(limits: TarballCacheLimits): void {
+  while (tarballCache.size > limits.maxEntries || tarballCacheTotalBytes > limits.maxBytes) {
+    const oldestKey = tarballCache.keys().next().value as string | undefined;
+    if (!oldestKey) {
+      break;
+    }
+    const oldest = tarballCache.get(oldestKey);
+    tarballCache.delete(oldestKey);
+    if (oldest) {
+      tarballCacheTotalBytes = Math.max(0, tarballCacheTotalBytes - oldest.size);
+    }
+  }
+}
+
+function cacheTarballInMemory(
+  cacheKey: string,
+  tarball: ArrayBuffer | Uint8Array,
+  limits: TarballCacheLimits
+): void {
+  if (limits.maxEntries <= 0 || limits.maxBytes <= 0) {
+    return;
+  }
+
+  const bytes = tarball instanceof Uint8Array ? tarball : new Uint8Array(tarball);
+  const size = bytes.byteLength;
+  if (size <= 0 || size > limits.maxBytes) {
+    return;
+  }
+
+  const existing = tarballCache.get(cacheKey);
+  if (existing) {
+    tarballCacheTotalBytes = Math.max(0, tarballCacheTotalBytes - existing.size);
+    tarballCache.delete(cacheKey);
+  }
+
+  const copied = new Uint8Array(size);
+  copied.set(bytes);
+  tarballCache.set(cacheKey, { tarball: copied, size });
+  tarballCacheTotalBytes += size;
+  evictTarballCacheIfNeeded(limits);
+}
+
+async function getCachedTarball(cacheKey: string, limits: TarballCacheLimits): Promise<ArrayBuffer | null> {
+  if (limits.maxEntries <= 0 || limits.maxBytes <= 0) {
+    return null;
+  }
+
+  const inMemory = tarballCache.get(cacheKey);
+  if (inMemory) {
+    tarballCache.delete(cacheKey);
+    tarballCache.set(cacheKey, inMemory);
+    return cloneBuffer(inMemory.tarball);
+  }
+
+  if (!isPersistentTarballCacheEnabled()) {
+    return null;
+  }
+
+  const persisted = await readPersistentBinaryCache({
+    namespace: TARBALL_PERSISTENT_CACHE_NAMESPACE,
+    key: cacheKey,
+    maxEntries: limits.maxEntries,
+    maxBytes: limits.maxBytes,
+  });
+  if (!persisted) {
+    return null;
+  }
+
+  cacheTarballInMemory(cacheKey, persisted, limits);
+  return cloneBuffer(new Uint8Array(persisted));
+}
+
+async function cacheTarball(
+  cacheKey: string,
+  tarball: ArrayBuffer,
+  limits: TarballCacheLimits
+): Promise<void> {
+  if (limits.maxEntries <= 0 || limits.maxBytes <= 0) {
+    return;
+  }
+
+  const bytes = new Uint8Array(tarball);
+  if (bytes.byteLength <= 0 || bytes.byteLength > limits.maxBytes) {
+    return;
+  }
+
+  cacheTarballInMemory(cacheKey, bytes, limits);
+  if (!isPersistentTarballCacheEnabled()) {
+    return;
+  }
+
+  await writePersistentBinaryCache(
+    {
+      namespace: TARBALL_PERSISTENT_CACHE_NAMESPACE,
+      key: cacheKey,
+      maxEntries: limits.maxEntries,
+      maxBytes: limits.maxBytes,
+    },
+    bytes
+  );
+}
+
+export function __clearTarballDownloadCacheForTests(): void {
+  tarballCache.clear();
+  tarballCacheTotalBytes = 0;
 }
 
 /**
@@ -189,24 +382,33 @@ export async function downloadAndExtract(
   destPath: string,
   options: ExtractOptions = {}
 ): Promise<string[]> {
-  const { onProgress } = options;
+  const { onProgress, cacheKey = url, disableDownloadCache = false } = options;
+  const cacheLimits = disableDownloadCache
+    ? { maxEntries: 0, maxBytes: 0 }
+    : getTarballCacheLimits();
 
-  onProgress?.(`Downloading ${url}...`);
+  let data = await getCachedTarball(cacheKey, cacheLimits);
+  if (data) {
+    onProgress?.(`Using cached tarball for ${url}`);
+  } else {
+    onProgress?.(`Downloading ${url}...`);
 
-  const response = await fetchWithRetry(
-    url,
-    undefined,
-    {
-      onRetry: (attempt, reason) => {
-        onProgress?.(`Retrying download (${attempt}) for ${url}: ${reason}`);
-      },
+    const response = await fetchWithRetry(
+      url,
+      undefined,
+      {
+        onRetry: (attempt, reason) => {
+          onProgress?.(`Retrying download (${attempt}) for ${url}: ${reason}`);
+        },
+      }
+    );
+    if (!response.ok) {
+      throw new Error(`Failed to download tarball: ${response.status}`);
     }
-  );
-  if (!response.ok) {
-    throw new Error(`Failed to download tarball: ${response.status}`);
-  }
 
-  const data = await response.arrayBuffer();
+    data = await response.arrayBuffer();
+    await cacheTarball(cacheKey, data, cacheLimits);
+  }
 
   return extractTarball(data, vfs, destPath, options);
 }
