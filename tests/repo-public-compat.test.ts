@@ -7,6 +7,7 @@ type RepoMatrixCase = {
   url: string;
   expectedKind: RunnableProjectKind;
   probePaths?: string[];
+  crawlLinksLimit?: number;
   skipInstall?: boolean;
   includeDev?: boolean;
   transformProjectSources?: boolean;
@@ -155,6 +156,192 @@ const PUBLIC_REPO_MATRIX: RepoMatrixCase[] = [
     skipInstall: true,
   },
   {
+    name: 'nextjs-with-ant-design',
+    url: 'https://github.com/vercel/next.js/tree/canary/examples/with-ant-design',
+    expectedKind: 'next',
+    skipInstall: true,
+  },
+  {
+    name: 'nextjs-with-emotion',
+    url: 'https://github.com/vercel/next.js/tree/canary/examples/with-emotion',
+    expectedKind: 'next',
+    skipInstall: true,
+  },
+  {
+    name: 'nextjs-with-framer-motion',
+    url: 'https://github.com/vercel/next.js/tree/canary/examples/with-framer-motion',
+    expectedKind: 'next',
+    skipInstall: true,
+  },
+  {
+    name: 'nextjs-with-lingui',
+    url: 'https://github.com/vercel/next.js/tree/canary/examples/with-lingui',
+    expectedKind: 'next',
+    skipInstall: true,
+  },
+  {
+    name: 'nextjs-with-mantine',
+    url: 'https://github.com/vercel/next.js/tree/canary/examples/with-mantine',
+    expectedKind: 'next',
+    skipInstall: true,
+  },
+  {
+    name: 'nextjs-with-next-translate',
+    url: 'https://github.com/vercel/next.js/tree/canary/examples/with-next-translate',
+    expectedKind: 'next',
+    skipInstall: true,
+  },
+  {
+    name: 'nextjs-with-react-bootstrap',
+    url: 'https://github.com/vercel/next.js/tree/canary/examples/with-react-bootstrap',
+    expectedKind: 'next',
+    skipInstall: true,
+  },
+  {
+    name: 'nextjs-with-react-hook-form',
+    url: 'https://github.com/vercel/next.js/tree/canary/examples/with-react-hook-form',
+    expectedKind: 'next',
+    skipInstall: true,
+  },
+  {
+    name: 'nextjs-with-rematch',
+    url: 'https://github.com/vercel/next.js/tree/canary/examples/with-rematch',
+    expectedKind: 'next',
+    skipInstall: true,
+  },
+  {
+    name: 'nextjs-with-route-as-modal',
+    url: 'https://github.com/vercel/next.js/tree/canary/examples/with-route-as-modal',
+    expectedKind: 'next',
+    skipInstall: true,
+  },
+  {
+    name: 'nextjs-with-sass',
+    url: 'https://github.com/vercel/next.js/tree/canary/examples/with-sass',
+    expectedKind: 'next',
+    skipInstall: true,
+  },
+  {
+    name: 'nextjs-with-service-worker',
+    url: 'https://github.com/vercel/next.js/tree/canary/examples/with-service-worker',
+    expectedKind: 'next',
+    skipInstall: true,
+  },
+  {
+    name: 'nextjs-with-shallow-routing',
+    url: 'https://github.com/vercel/next.js/tree/canary/examples/with-shallow-routing',
+    expectedKind: 'next',
+    skipInstall: true,
+  },
+  {
+    name: 'nextjs-with-styled-jsx',
+    url: 'https://github.com/vercel/next.js/tree/canary/examples/with-styled-jsx',
+    expectedKind: 'next',
+    skipInstall: true,
+  },
+  {
+    name: 'nextjs-with-typescript',
+    url: 'https://github.com/vercel/next.js/tree/canary/examples/with-typescript',
+    expectedKind: 'next',
+    skipInstall: true,
+  },
+  {
+    name: 'nextjs-with-web-worker',
+    url: 'https://github.com/vercel/next.js/tree/canary/examples/with-web-worker',
+    expectedKind: 'next',
+    skipInstall: true,
+  },
+  {
+    name: 'tanstack-basic',
+    url: 'https://github.com/TanStack/router/tree/main/examples/react/basic',
+    expectedKind: 'vite',
+    skipInstall: true,
+  },
+  {
+    name: 'tanstack-basic-default-search-params',
+    url: 'https://github.com/TanStack/router/tree/main/examples/react/basic-default-search-params',
+    expectedKind: 'vite',
+    skipInstall: true,
+  },
+  {
+    name: 'tanstack-basic-devtools-panel',
+    url: 'https://github.com/TanStack/router/tree/main/examples/react/basic-devtools-panel',
+    expectedKind: 'vite',
+    skipInstall: true,
+  },
+  {
+    name: 'tanstack-basic-file-based',
+    url: 'https://github.com/TanStack/router/tree/main/examples/react/basic-file-based',
+    expectedKind: 'vite',
+    skipInstall: true,
+  },
+  {
+    name: 'tanstack-basic-react-query',
+    url: 'https://github.com/TanStack/router/tree/main/examples/react/basic-react-query',
+    expectedKind: 'vite',
+    skipInstall: true,
+  },
+  {
+    name: 'tanstack-basic-react-query-file-based',
+    url: 'https://github.com/TanStack/router/tree/main/examples/react/basic-react-query-file-based',
+    expectedKind: 'vite',
+    skipInstall: true,
+  },
+  {
+    name: 'tanstack-deferred-data',
+    url: 'https://github.com/TanStack/router/tree/main/examples/react/deferred-data',
+    expectedKind: 'vite',
+    skipInstall: true,
+  },
+  {
+    name: 'tanstack-kitchen-sink',
+    url: 'https://github.com/TanStack/router/tree/main/examples/react/kitchen-sink',
+    expectedKind: 'vite',
+    skipInstall: true,
+  },
+  {
+    name: 'tanstack-kitchen-sink-file-based',
+    url: 'https://github.com/TanStack/router/tree/main/examples/react/kitchen-sink-file-based',
+    expectedKind: 'vite',
+    skipInstall: true,
+  },
+  {
+    name: 'tanstack-kitchen-sink-react-query',
+    url: 'https://github.com/TanStack/router/tree/main/examples/react/kitchen-sink-react-query',
+    expectedKind: 'vite',
+    skipInstall: true,
+  },
+  {
+    name: 'tanstack-large-file-based',
+    url: 'https://github.com/TanStack/router/tree/main/examples/react/large-file-based',
+    expectedKind: 'vite',
+    skipInstall: true,
+  },
+  {
+    name: 'tanstack-location-masking',
+    url: 'https://github.com/TanStack/router/tree/main/examples/react/location-masking',
+    expectedKind: 'vite',
+    skipInstall: true,
+  },
+  {
+    name: 'tanstack-navigation-blocking',
+    url: 'https://github.com/TanStack/router/tree/main/examples/react/navigation-blocking',
+    expectedKind: 'vite',
+    skipInstall: true,
+  },
+  {
+    name: 'tanstack-scroll-restoration',
+    url: 'https://github.com/TanStack/router/tree/main/examples/react/scroll-restoration',
+    expectedKind: 'vite',
+    skipInstall: true,
+  },
+  {
+    name: 'tanstack-view-transitions',
+    url: 'https://github.com/TanStack/router/tree/main/examples/react/view-transitions',
+    expectedKind: 'vite',
+    skipInstall: true,
+  },
+  {
     name: 'svelte-vite-plugin-env',
     url: 'https://github.com/sveltejs/vite-plugin-svelte/tree/main/packages/e2e-tests/env',
     expectedKind: 'vite',
@@ -180,13 +367,15 @@ async function probeRunningApp(port: number, paths: string[]): Promise<{
   statusCode: number;
   path: string;
   bodyPreview: string;
+  crawledPaths: string[];
 }> {
   const bridge = getServerBridge();
   let lastStatus = 0;
   let lastPath = paths[0] || '/';
   let lastPreview = '';
+  let crawledPaths: string[] = [];
 
-  for (const probePath of paths) {
+  const probeSinglePath = async (probePath: string) => {
     const response = await bridge.handleRequest(
       port,
       'GET',
@@ -206,19 +395,71 @@ async function probeRunningApp(port: number, paths: string[]): Promise<{
       response.statusCode < 400 &&
       (body.trim().length > 0 || hasRedirectLocation) &&
       !/Cannot GET \//i.test(bodyPreview);
+    return {
+      ok,
+      response,
+      body,
+      bodyPreview,
+    };
+  };
 
-    if (ok) {
+  const extractLocalLinks = (basePath: string, html: string): string[] => {
+    const links = new Set<string>();
+    const hrefRegex = /href\s*=\s*["']([^"']+)["']/gi;
+    let match: RegExpExecArray | null = null;
+    while ((match = hrefRegex.exec(html))) {
+      const href = (match[1] || '').trim();
+      if (!href || href.startsWith('#')) continue;
+      if (/^(mailto:|tel:|javascript:)/i.test(href)) continue;
+      try {
+        const resolved = new URL(href, `http://localhost${basePath}`);
+        if (resolved.host !== 'localhost') continue;
+        const normalizedPath = `${resolved.pathname}${resolved.search}`;
+        if (!normalizedPath.startsWith('/')) continue;
+        if (normalizedPath.startsWith('/__virtual__/')) continue;
+        if (normalizedPath.startsWith('/_next/')) continue;
+        if (normalizedPath.startsWith('/@vite/')) continue;
+        links.add(normalizedPath);
+      } catch {
+        // ignore invalid href
+      }
+    }
+    return [...links];
+  };
+
+  for (const probePath of paths) {
+    const firstProbe = await probeSinglePath(probePath);
+
+    if (firstProbe.ok) {
+      const linksToProbe = extractLocalLinks(probePath, firstProbe.body).slice(0, 8);
+      const traversed = new Set<string>([probePath]);
+      for (const linkPath of linksToProbe) {
+        if (traversed.has(linkPath)) continue;
+        traversed.add(linkPath);
+        const linkedProbe = await probeSinglePath(linkPath);
+        if (!linkedProbe.ok) {
+          return {
+            ok: false,
+            statusCode: linkedProbe.response.statusCode,
+            path: linkPath,
+            bodyPreview: linkedProbe.bodyPreview,
+            crawledPaths: [...traversed],
+          };
+        }
+      }
+      crawledPaths = [...traversed];
       return {
-        ok,
-        statusCode: response.statusCode,
+        ok: true,
+        statusCode: firstProbe.response.statusCode,
         path: probePath,
-        bodyPreview,
+        bodyPreview: firstProbe.bodyPreview,
+        crawledPaths,
       };
     }
 
-    lastStatus = response.statusCode;
+    lastStatus = firstProbe.response.statusCode;
     lastPath = probePath;
-    lastPreview = bodyPreview;
+    lastPreview = firstProbe.bodyPreview;
   }
 
   return {
@@ -226,6 +467,7 @@ async function probeRunningApp(port: number, paths: string[]): Promise<{
     statusCode: lastStatus,
     path: lastPath,
     bodyPreview: lastPreview,
+    crawledPaths,
   };
 }
 
@@ -259,7 +501,11 @@ describe.skipIf(process.env.RUN_PUBLIC_REPO_MATRIX !== '1')('public repo compati
       const matrix = requestedNames.length > 0
         ? PUBLIC_REPO_MATRIX.filter(repo => requestedNames.includes(repo.name))
         : PUBLIC_REPO_MATRIX;
-      expect(matrix.length).toBeGreaterThanOrEqual(20);
+      if (requestedNames.length > 0) {
+        expect(matrix.length).toBe(requestedNames.length);
+      } else {
+        expect(matrix.length).toBeGreaterThanOrEqual(50);
+      }
 
       for (const repoCase of matrix) {
         let running: Awaited<ReturnType<typeof bootstrapAndRunGitHubProject>>['running'] | undefined;
@@ -299,7 +545,7 @@ describe.skipIf(process.env.RUN_PUBLIC_REPO_MATRIX !== '1')('public repo compati
 
           if (!probe.ok) {
             throw new Error(
-              `probe failed at ${probe.path} with status ${probe.statusCode}; body preview: ${probe.bodyPreview}`
+              `probe failed at ${probe.path} with status ${probe.statusCode}; body preview: ${probe.bodyPreview}; crawled: ${probe.crawledPaths.join(', ')}`
             );
           }
 
