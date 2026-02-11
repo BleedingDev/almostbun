@@ -557,9 +557,7 @@ describe('fs module (Node.js compat)', () => {
     });
   });
 
-  // Note: Callback-based async tests are skipped due to VirtualFS timing issues
-  // The fs.promises API is fully tested above and is the recommended API
-  describe.skip('async callbacks', () => {
+  describe('async callbacks', () => {
     describe('fs.readFile()', () => {
       it('should read file via callback', async () => {
         vfs.writeFileSync('/test.txt', 'hello world');

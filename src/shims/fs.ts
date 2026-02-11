@@ -45,7 +45,8 @@ export interface FsShim {
   rmSync(path: string, options?: { recursive?: boolean; force?: boolean }): void;
   watch(filename: string, options?: { persistent?: boolean; recursive?: boolean }, listener?: WatchListener): FSWatcher;
   watch(filename: string, listener?: WatchListener): FSWatcher;
-  readFile(path: string, callback: (err: Error | null, data?: Uint8Array) => void): void;
+  readFile(path: string, callback: (err: Error | null, data?: Uint8Array | string) => void): void;
+  readFile(path: string, options: string, callback: (err: Error | null, data?: Uint8Array | string) => void): void;
   readFile(path: string, options: { encoding: string }, callback: (err: Error | null, data?: string) => void): void;
   writeFile(path: string, data: string | Uint8Array, callback: (err: Error | null) => void): void;
   writeFile(
@@ -304,6 +305,17 @@ function trackCall(method: 'statSync' | 'readdirSync', path: string): void {
 export function createFsShim(vfs: VirtualFS, getCwd?: () => string): FsShim {
   // Helper to resolve paths with cwd
   const resolvePath = (pathLike: unknown) => toPath(pathLike, getCwd);
+  const defer = (callback: () => void): void => {
+    if (typeof queueMicrotask === 'function') {
+      queueMicrotask(callback);
+      return;
+    }
+    Promise.resolve().then(callback).catch((error) => {
+      setTimeout(() => {
+        throw error;
+      }, 0);
+    });
+  };
   const constants: FsConstants = {
     F_OK: 0,
     R_OK: 4,
@@ -774,11 +786,27 @@ export function createFsShim(vfs: VirtualFS, getCwd?: () => string): FsShim {
 
     readFile(
       pathLike: unknown,
-      optionsOrCallback?: { encoding?: string } | ((err: Error | null, data?: string | Uint8Array) => void),
+      optionsOrCallback?:
+        | string
+        | { encoding?: string }
+        | ((err: Error | null, data?: string | Uint8Array) => void),
       callback?: (err: Error | null, data?: string | Uint8Array) => void
     ): void {
       const path = resolvePath(pathLike);
-      vfs.readFile(path, optionsOrCallback as { encoding?: string }, callback);
+      const cb = typeof optionsOrCallback === 'function' ? optionsOrCallback : callback;
+      if (!cb) return;
+
+      try {
+        const encoding = normalizeEncoding(
+          typeof optionsOrCallback === 'function' ? undefined : optionsOrCallback
+        );
+        const data = encoding === 'utf8' || encoding === 'utf-8' || encoding?.startsWith('utf8')
+          ? vfs.readFileSync(path, 'utf8')
+          : createBuffer(vfs.readFileSync(path));
+        defer(() => cb(null, data));
+      } catch (error) {
+        defer(() => cb(error as Error));
+      }
     },
 
     writeFile(
@@ -793,18 +821,28 @@ export function createFsShim(vfs: VirtualFS, getCwd?: () => string): FsShim {
       const cb = typeof optionsOrCallback === 'function' ? optionsOrCallback : callback;
       try {
         vfs.writeFileSync(path, data);
-        cb?.(null);
+        if (cb) defer(() => cb(null));
       } catch (error) {
-        cb?.(error as Error);
+        if (cb) defer(() => cb(error as Error));
       }
     },
 
     stat(pathLike: unknown, callback: (err: Error | null, stats?: Stats) => void): void {
-      vfs.stat(resolvePath(pathLike), callback);
+      try {
+        const stats = vfs.statSync(resolvePath(pathLike));
+        defer(() => callback(null, stats));
+      } catch (error) {
+        defer(() => callback(error as Error));
+      }
     },
 
     lstat(pathLike: unknown, callback: (err: Error | null, stats?: Stats) => void): void {
-      vfs.lstat(resolvePath(pathLike), callback);
+      try {
+        const stats = vfs.lstatSync(resolvePath(pathLike));
+        defer(() => callback(null, stats));
+      } catch (error) {
+        defer(() => callback(error as Error));
+      }
     },
 
     readdir(
@@ -812,11 +850,23 @@ export function createFsShim(vfs: VirtualFS, getCwd?: () => string): FsShim {
       optionsOrCallback?: { withFileTypes?: boolean } | ((err: Error | null, files?: string[]) => void),
       callback?: (err: Error | null, files?: string[]) => void
     ): void {
-      vfs.readdir(resolvePath(pathLike), optionsOrCallback as { withFileTypes?: boolean }, callback);
+      const cb = typeof optionsOrCallback === 'function' ? optionsOrCallback : callback;
+      if (!cb) return;
+      try {
+        const files = vfs.readdirSync(resolvePath(pathLike));
+        defer(() => cb(null, files));
+      } catch (error) {
+        defer(() => cb(error as Error));
+      }
     },
 
     realpath(pathLike: unknown, callback: (err: Error | null, resolvedPath?: string) => void): void {
-      vfs.realpath(resolvePath(pathLike), callback);
+      try {
+        const resolvedPath = vfs.realpathSync(resolvePath(pathLike));
+        defer(() => callback(null, resolvedPath));
+      } catch (error) {
+        defer(() => callback(error as Error));
+      }
     },
 
     access(
@@ -824,7 +874,14 @@ export function createFsShim(vfs: VirtualFS, getCwd?: () => string): FsShim {
       modeOrCallback?: number | ((err: Error | null) => void),
       callback?: (err: Error | null) => void
     ): void {
-      vfs.access(resolvePath(pathLike), modeOrCallback, callback);
+      const cb = typeof modeOrCallback === 'function' ? modeOrCallback : callback;
+      if (!cb) return;
+      try {
+        vfs.accessSync(resolvePath(pathLike), typeof modeOrCallback === 'number' ? modeOrCallback : undefined);
+        defer(() => cb(null));
+      } catch (error) {
+        defer(() => cb(error as Error));
+      }
     },
 
     createReadStream(pathLike: unknown): unknown {
