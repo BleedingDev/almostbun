@@ -11,6 +11,7 @@ import {
   readPersistentBinaryCache,
   writePersistentBinaryCache,
 } from '../cache/persistent-binary-cache';
+import { buildVersionedCacheKey } from '../cache/cache-key';
 
 export interface ExtractOptions {
   stripComponents?: number; // Number of leading path components to strip (default: 1 for npm's "package/" prefix)
@@ -383,11 +384,16 @@ export async function downloadAndExtract(
   options: ExtractOptions = {}
 ): Promise<string[]> {
   const { onProgress, cacheKey = url, disableDownloadCache = false } = options;
+  const versionedCacheKey = buildVersionedCacheKey({
+    namespace: 'npm-tarballs',
+    scope: 'download',
+    rawKey: cacheKey,
+  });
   const cacheLimits = disableDownloadCache
     ? { maxEntries: 0, maxBytes: 0 }
     : getTarballCacheLimits();
 
-  let data = await getCachedTarball(cacheKey, cacheLimits);
+  let data = await getCachedTarball(versionedCacheKey, cacheLimits);
   if (data) {
     onProgress?.(`Using cached tarball for ${url}`);
   } else {
@@ -407,7 +413,7 @@ export async function downloadAndExtract(
     }
 
     data = await response.arrayBuffer();
-    await cacheTarball(cacheKey, data, cacheLimits);
+    await cacheTarball(versionedCacheKey, data, cacheLimits);
   }
 
   return extractTarball(data, vfs, destPath, options);

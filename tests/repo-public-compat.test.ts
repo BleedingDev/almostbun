@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest';
+import { mkdir, writeFile } from 'node:fs/promises';
+import path from 'node:path';
 import { bootstrapAndRunGitHubProject, type RunnableProjectKind } from '../src/repo/runner';
 import { getServerBridge, resetServerBridge } from '../src/server-bridge';
 
@@ -19,6 +21,8 @@ const CASE_RETRIES = Math.max(1, Number(process.env.PUBLIC_REPO_CASE_RETRIES || 
 const CASE_RETRY_DELAY_MS = Math.max(0, Number(process.env.PUBLIC_REPO_CASE_RETRY_DELAY_MS || 300));
 const DEFAULT_CRAWL_LINKS_LIMIT = Math.max(0, Number(process.env.PUBLIC_REPO_CRAWL_LINKS_LIMIT || 8));
 const LOG_SCAN_TAIL = Math.max(10, Number(process.env.PUBLIC_REPO_LOG_SCAN_TAIL || 60));
+const MATRIX_REPORT_PATH = (process.env.PUBLIC_REPO_MATRIX_REPORT_PATH || '').trim();
+const STRICT_LOG_VALIDATION = process.env.PUBLIC_REPO_STRICT_LOG_VALIDATION === '1';
 
 const FATAL_BODY_PATTERNS: RegExp[] = [
   /\bReferenceError\b/i,
@@ -60,13 +64,40 @@ function findFatalLogs(logs: string[]): string[] {
     if (!FATAL_LOG_PATTERNS.some(pattern => pattern.test(line))) {
       continue;
     }
-    if (BENIGN_LOG_PATTERNS.some(pattern => pattern.test(line))) {
+    if (!STRICT_LOG_VALIDATION && BENIGN_LOG_PATTERNS.some(pattern => pattern.test(line))) {
       continue;
     }
     fatal.push(line);
   }
   return fatal;
 }
+
+type RepoMatrixCaseResult = {
+  name: string;
+  url: string;
+  expectedKind: RunnableProjectKind;
+  status: 'pass' | 'fail';
+  attempts: number;
+  durationMs: number;
+  detectedKind?: RunnableProjectKind;
+  probePath?: string;
+  crawledPaths?: string[];
+  logsTail: string[];
+  error?: string;
+};
+
+type RepoMatrixReport = {
+  version: 1;
+  generatedAt: string;
+  completedAt: string;
+  totalCases: number;
+  passCount: number;
+  failCount: number;
+  strictLogValidation: boolean;
+  caseTimeoutMs: number;
+  retries: number;
+  results: RepoMatrixCaseResult[];
+};
 
 const PUBLIC_REPO_MATRIX: RepoMatrixCase[] = [
   {
@@ -899,12 +930,32 @@ describe.skipIf(process.env.RUN_PUBLIC_REPO_MATRIX !== '1')('public repo compati
         expect(matrix.length).toBeGreaterThanOrEqual(50);
       }
 
+      const report: RepoMatrixReport = {
+        version: 1,
+        generatedAt: new Date().toISOString(),
+        completedAt: '',
+        totalCases: matrix.length,
+        passCount: 0,
+        failCount: 0,
+        strictLogValidation: STRICT_LOG_VALIDATION,
+        caseTimeoutMs: CASE_TIMEOUT_MS,
+        retries: CASE_RETRIES,
+        results: [],
+      };
+
       for (const repoCase of matrix) {
+        const caseStartedAt = Date.now();
         const attemptErrors: string[] = [];
         let passed = false;
+        let attempts = 0;
+        let detectedKind: RunnableProjectKind | undefined;
+        let probePath: string | undefined;
+        let crawledPaths: string[] | undefined;
+        let logsTail: string[] = [];
         console.log(`[matrix] start ${repoCase.name}`);
 
         for (let attempt = 1; attempt <= CASE_RETRIES; attempt += 1) {
+          attempts = attempt;
           let running: Awaited<ReturnType<typeof bootstrapAndRunGitHubProject>>['running'] | undefined;
           const logs: string[] = [];
           if (attempt > 1) {
@@ -933,6 +984,7 @@ describe.skipIf(process.env.RUN_PUBLIC_REPO_MATRIX !== '1')('public repo compati
 
             running = started.running;
             expect(started.detected.kind).toBe(repoCase.expectedKind);
+            detectedKind = started.detected.kind;
 
             const probe = await withTimeout(
             probeRunningApp(
@@ -949,17 +1001,21 @@ describe.skipIf(process.env.RUN_PUBLIC_REPO_MATRIX !== '1')('public repo compati
                 `probe failed at ${probe.path} with status ${probe.statusCode}; body preview: ${probe.bodyPreview}; body error pattern: ${probe.bodyErrorPattern || 'none'}; crawled: ${probe.crawledPaths.join(', ')}`
               );
             }
+            probePath = probe.path;
+            crawledPaths = probe.crawledPaths;
 
             const fatalLogs = findFatalLogs(logs);
             if (fatalLogs.length > 0) {
               throw new Error(`fatal runtime logs detected:\n${fatalLogs.slice(0, 10).join('\n')}`);
             }
 
+            logsTail = logs.slice(-25);
             console.log(`[matrix] pass ${repoCase.name} (${started.detected.kind})`);
             passed = true;
             break;
           } catch (error) {
             const renderedError = String(error);
+            logsTail = logs.slice(-25);
             attemptErrors.push(
               `attempt ${attempt}/${CASE_RETRIES}: ${renderedError}\nrecent logs:\n${logs.slice(-25).join('\n')}`
             );
@@ -978,10 +1034,38 @@ describe.skipIf(process.env.RUN_PUBLIC_REPO_MATRIX !== '1')('public repo compati
           }
         }
 
+        report.results.push({
+          name: repoCase.name,
+          url: repoCase.url,
+          expectedKind: repoCase.expectedKind,
+          status: passed ? 'pass' : 'fail',
+          attempts,
+          durationMs: Date.now() - caseStartedAt,
+          detectedKind,
+          probePath,
+          crawledPaths,
+          logsTail,
+          error: passed ? undefined : attemptErrors.join('\n\n'),
+        });
+
         if (!passed) {
           failures.push(
             `[${repoCase.name}] ${repoCase.url}\n${attemptErrors.join('\n\n')}`
           );
+        }
+      }
+
+      report.passCount = report.results.filter(result => result.status === 'pass').length;
+      report.failCount = report.results.length - report.passCount;
+      report.completedAt = new Date().toISOString();
+      if (MATRIX_REPORT_PATH) {
+        const reportPath = path.resolve(MATRIX_REPORT_PATH);
+        try {
+          await mkdir(path.dirname(reportPath), { recursive: true });
+          await writeFile(reportPath, JSON.stringify(report, null, 2), 'utf8');
+          console.log(`[matrix] report written: ${reportPath}`);
+        } catch (error) {
+          console.warn(`[matrix] report write failed (${reportPath}): ${String(error)}`);
         }
       }
 

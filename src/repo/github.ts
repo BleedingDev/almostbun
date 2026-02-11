@@ -13,6 +13,7 @@ import {
   readPersistentBinaryCache,
   writePersistentBinaryCache,
 } from '../cache/persistent-binary-cache';
+import { buildVersionedCacheKey } from '../cache/cache-key';
 
 interface ArchiveCacheEntry {
   archive: Uint8Array;
@@ -342,6 +343,12 @@ async function fetchRawFileWithFallback(
           `Retrying raw file download (${relativePath}) [${attempt}] due to ${formatRetryReason(reason)}`
         );
       },
+      cache: {
+        namespace: 'github-raw',
+        scope: 'raw.githubusercontent.com',
+        key: rawUrl,
+        ttlMs: 15 * 60 * 1000,
+      },
     });
     if (response.ok) {
       return response;
@@ -356,7 +363,14 @@ async function fetchRawFileWithFallback(
       const proxiedUrl = buildProxyUrl(proxyBase, rawUrl);
       options.onProgress?.(`Retrying file via CORS proxy (${relativePath}): ${proxyBase}`);
       try {
-        const proxiedResponse = await fetchWithRetry(proxiedUrl);
+        const proxiedResponse = await fetchWithRetry(proxiedUrl, undefined, {
+          cache: {
+            namespace: 'github-raw-proxy',
+            scope: proxyBase,
+            key: rawUrl,
+            ttlMs: 15 * 60 * 1000,
+          },
+        });
         if (proxiedResponse.ok) {
           return proxiedResponse;
         }
@@ -387,7 +401,14 @@ async function fetchFileViaContentsApi(
 
   let contentsResponse: Response;
   try {
-    contentsResponse = await fetchWithRetry(contentsUrl);
+    contentsResponse = await fetchWithRetry(contentsUrl, undefined, {
+      cache: {
+        namespace: 'github-contents',
+        scope: `${repo.owner}/${repo.repo}`,
+        key: `${repo.ref}:${relativePath}`,
+        ttlMs: 15 * 60 * 1000,
+      },
+    });
   } catch {
     return null;
   }
@@ -430,7 +451,14 @@ async function importGitHubRepoViaApi(
   const treeUrl =
     `https://api.github.com/repos/${repo.owner}/${repo.repo}/git/trees/${encodeURIComponent(repo.ref)}?recursive=1`;
   options.onProgress?.('Archive download unavailable, using GitHub API fallback...');
-  const treeResponse = await fetchWithRetry(treeUrl);
+  const treeResponse = await fetchWithRetry(treeUrl, undefined, {
+    cache: {
+      namespace: 'github-tree',
+      scope: `${repo.owner}/${repo.repo}`,
+      key: repo.ref,
+      ttlMs: 10 * 60 * 1000,
+    },
+  });
   if (!treeResponse.ok) {
     throw new Error(`GitHub API tree fetch failed: ${treeResponse.status}`);
   }
@@ -600,7 +628,11 @@ export async function importGitHubRepo(
   const repo = parseGitHubRepoUrl(repoUrl);
   const destPath = options.destPath || '/project';
   const projectPath = repo.subdir ? path.join(destPath, repo.subdir) : destPath;
-  const archiveCacheKey = repo.archiveUrl;
+  const archiveCacheKey = buildVersionedCacheKey({
+    namespace: 'github-archives',
+    scope: `${repo.owner}/${repo.repo}`,
+    rawKey: repo.archiveUrl,
+  });
 
   const fetchArchive = async (archiveUrl: string): Promise<Response> => {
     return fetchWithRetry(

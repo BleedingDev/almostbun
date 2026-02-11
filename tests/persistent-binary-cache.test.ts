@@ -118,6 +118,70 @@ describe('persistent binary cache', () => {
       restore();
     }
   });
+
+  it('enforces global cache quota across namespaces', async () => {
+    const restore = installBrowserEnvironment({
+      localStorage: createStorageMock(),
+      navigatorStorage: undefined,
+    });
+
+    const originalGlobalEntries = process.env.ALMOSTBUN_GLOBAL_CACHE_MAX_ENTRIES;
+    const originalGlobalBytes = process.env.ALMOSTBUN_GLOBAL_CACHE_MAX_BYTES;
+    process.env.ALMOSTBUN_GLOBAL_CACHE_MAX_ENTRIES = '1';
+    process.env.ALMOSTBUN_GLOBAL_CACHE_MAX_BYTES = String(1024 * 1024);
+
+    try {
+      await writePersistentBinaryCache(
+        {
+          namespace: 'global-a',
+          key: 'entry-a',
+          maxEntries: 8,
+          maxBytes: 1024 * 1024,
+        },
+        encodeText('payload-a')
+      );
+
+      await writePersistentBinaryCache(
+        {
+          namespace: 'global-b',
+          key: 'entry-b',
+          maxEntries: 8,
+          maxBytes: 1024 * 1024,
+        },
+        encodeText('payload-b')
+      );
+
+      const first = await readPersistentBinaryCache({
+        namespace: 'global-a',
+        key: 'entry-a',
+        maxEntries: 8,
+        maxBytes: 1024 * 1024,
+      });
+      const second = await readPersistentBinaryCache({
+        namespace: 'global-b',
+        key: 'entry-b',
+        maxEntries: 8,
+        maxBytes: 1024 * 1024,
+      });
+
+      expect(first).toBeNull();
+      expect(second).not.toBeNull();
+      expect(decodeText(second!)).toBe('payload-b');
+    } finally {
+      if (originalGlobalEntries === undefined) {
+        delete process.env.ALMOSTBUN_GLOBAL_CACHE_MAX_ENTRIES;
+      } else {
+        process.env.ALMOSTBUN_GLOBAL_CACHE_MAX_ENTRIES = originalGlobalEntries;
+      }
+      if (originalGlobalBytes === undefined) {
+        delete process.env.ALMOSTBUN_GLOBAL_CACHE_MAX_BYTES;
+      } else {
+        process.env.ALMOSTBUN_GLOBAL_CACHE_MAX_BYTES = originalGlobalBytes;
+      }
+      await clearPersistentBinaryCacheForTests();
+      restore();
+    }
+  });
 });
 
 function encodeText(input: string): Uint8Array {

@@ -6,11 +6,15 @@ import {
   importGitHubRepo,
   parseGitHubRepoUrl,
 } from '../src/repo/github';
+import { __clearFetchResponseCacheForTests } from '../src/npm/fetch';
+import { clearPersistentBinaryCacheForTests } from '../src/cache/persistent-binary-cache';
 
 describe('GitHub repo import helpers', () => {
-  afterEach(() => {
+  afterEach(async () => {
     vi.restoreAllMocks();
     __clearGitHubArchiveCacheForTests();
+    __clearFetchResponseCacheForTests();
+    await clearPersistentBinaryCacheForTests();
   });
 
   it('parses basic github repository URLs', () => {

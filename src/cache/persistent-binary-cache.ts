@@ -32,7 +32,27 @@ const OPFS_ROOT_DIR = 'almostbun-cache-v1';
 const OPFS_INDEX_FILE = 'index.json';
 const LOCAL_INDEX_PREFIX = '__almostbun_cache_index_v1__';
 const LOCAL_ENTRY_PREFIX = '__almostbun_cache_entry_v1__';
+const GLOBAL_INDEX_KEY = '__almostbun_cache_global_index_v1__';
+const DEFAULT_GLOBAL_CACHE_MAX_ENTRIES = 2048;
+const DEFAULT_GLOBAL_CACHE_MAX_BYTES = 1024 * 1024 * 1024;
 const namespaceWriteLocks = new Map<string, Promise<void>>();
+let globalWriteLock: Promise<void> | null = null;
+
+type CacheBackend = 'opfs' | 'local';
+
+interface GlobalCacheEntry {
+  namespace: string;
+  key: string;
+  id: string;
+  size: number;
+  accessedAt: number;
+  backend: CacheBackend;
+}
+
+interface GlobalCacheIndex {
+  version: 1;
+  entries: GlobalCacheEntry[];
+}
 
 type FileHandleLike = {
   getFile: () => Promise<{ arrayBuffer: () => Promise<ArrayBuffer>; text: () => Promise<string> }>;
@@ -59,6 +79,24 @@ type StorageLike = {
 
 function isBrowserRuntime(): boolean {
   return typeof window !== 'undefined' && typeof document !== 'undefined';
+}
+
+function getRuntimeEnvValue(name: string): string | undefined {
+  try {
+    const runtimeProcess = (globalThis as typeof globalThis & {
+      process?: { env?: Record<string, string | undefined> };
+    }).process;
+    return runtimeProcess?.env?.[name];
+  } catch {
+    return undefined;
+  }
+}
+
+function readEnvNumber(name: string, fallback: number): number {
+  const raw = getRuntimeEnvValue(name);
+  if (raw == null) return fallback;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) ? parsed : fallback;
 }
 
 function safeKeyFragment(input: string): string {
@@ -108,6 +146,26 @@ async function withNamespaceWriteLock<T>(
     releaseCurrent?.();
     if (namespaceWriteLocks.get(namespace) === queueTail) {
       namespaceWriteLocks.delete(namespace);
+    }
+  }
+}
+
+async function withGlobalWriteLock<T>(operation: () => Promise<T>): Promise<T> {
+  const previous = globalWriteLock ?? Promise.resolve();
+  let releaseCurrent: (() => void) | undefined;
+  const current = new Promise<void>((resolve) => {
+    releaseCurrent = resolve;
+  });
+  const queueTail = previous.then(() => current);
+  globalWriteLock = queueTail;
+
+  await previous;
+  try {
+    return await operation();
+  } finally {
+    releaseCurrent?.();
+    if (globalWriteLock === queueTail) {
+      globalWriteLock = null;
     }
   }
 }
@@ -171,6 +229,87 @@ function parseIndex(raw: string | null): PersistentCacheIndex {
   }
 }
 
+function defaultGlobalIndex(): GlobalCacheIndex {
+  return { version: 1, entries: [] };
+}
+
+function parseGlobalIndex(raw: string | null): GlobalCacheIndex {
+  if (!raw) {
+    return defaultGlobalIndex();
+  }
+
+  try {
+    const parsed = JSON.parse(raw) as {
+      version?: unknown;
+      entries?: unknown;
+    };
+    if (!Array.isArray(parsed.entries)) {
+      return defaultGlobalIndex();
+    }
+
+    const deduped = new Map<string, GlobalCacheEntry>();
+    for (const candidate of parsed.entries) {
+      if (!candidate || typeof candidate !== 'object') {
+        continue;
+      }
+
+      const maybe = candidate as {
+        namespace?: unknown;
+        key?: unknown;
+        id?: unknown;
+        size?: unknown;
+        accessedAt?: unknown;
+        backend?: unknown;
+      };
+
+      if (
+        typeof maybe.namespace !== 'string' ||
+        typeof maybe.key !== 'string' ||
+        typeof maybe.id !== 'string' ||
+        (maybe.backend !== 'opfs' && maybe.backend !== 'local')
+      ) {
+        continue;
+      }
+
+      const size = Number(maybe.size);
+      const accessedAt = Number(maybe.accessedAt);
+      if (!Number.isFinite(size) || size <= 0) {
+        continue;
+      }
+
+      const dedupeKey = `${maybe.namespace}|${maybe.key}|${maybe.backend}`;
+      deduped.set(dedupeKey, {
+        namespace: maybe.namespace,
+        key: maybe.key,
+        id: maybe.id,
+        size,
+        backend: maybe.backend,
+        accessedAt: Number.isFinite(accessedAt) ? accessedAt : 0,
+      });
+    }
+
+    return {
+      version: 1,
+      entries: [...deduped.values()],
+    };
+  } catch {
+    return defaultGlobalIndex();
+  }
+}
+
+function getGlobalCacheLimits(): { maxEntries: number; maxBytes: number } {
+  return {
+    maxEntries: Math.max(
+      0,
+      Math.floor(readEnvNumber('ALMOSTBUN_GLOBAL_CACHE_MAX_ENTRIES', DEFAULT_GLOBAL_CACHE_MAX_ENTRIES))
+    ),
+    maxBytes: Math.max(
+      0,
+      Math.floor(readEnvNumber('ALMOSTBUN_GLOBAL_CACHE_MAX_BYTES', DEFAULT_GLOBAL_CACHE_MAX_BYTES))
+    ),
+  };
+}
+
 function enforceLimits(
   entries: PersistentCacheEntry[],
   maxEntries: number,
@@ -221,6 +360,14 @@ function getLocalStorageLike(): StorageLike | null {
   } catch {
     return null;
   }
+}
+
+function readGlobalIndex(storage: StorageLike): GlobalCacheIndex {
+  return parseGlobalIndex(storage.getItem(GLOBAL_INDEX_KEY));
+}
+
+function writeGlobalIndex(storage: StorageLike, index: GlobalCacheIndex): void {
+  storage.setItem(GLOBAL_INDEX_KEY, JSON.stringify(index));
 }
 
 function localIndexKey(namespace: string): string {
@@ -300,6 +447,7 @@ function readFromLocalStorage(options: PersistentBinaryCacheOptions): ArrayBuffe
     const bytes = base64ToBytes(encoded);
     entry.accessedAt = Date.now();
     writeLocalIndex(storage, options.namespace, index);
+    void touchGlobalCacheEntry(options.namespace, options.key, 'local', entry.size);
     return cloneArrayBuffer(bytes);
   } catch {
     removeLocalEntry(storage, options.namespace, entry);
@@ -340,26 +488,28 @@ function storeLocalPayload(
   return false;
 }
 
-function writeToLocalStorage(options: PersistentBinaryCacheOptions, bytes: Uint8Array): boolean {
+function writeToLocalStorage(options: PersistentBinaryCacheOptions, bytes: Uint8Array): PersistentCacheEntry | null {
   const storage = getLocalStorageLike();
   if (!storage) {
-    return false;
+    return null;
   }
 
   const id = entryIdForKey(options.key);
   const payload = bytesToBase64(bytes);
   const index = readLocalIndex(storage, options.namespace);
   if (!storeLocalPayload(storage, localEntryKey(options.namespace, id), payload, options.namespace, index)) {
-    return false;
+    return null;
   }
 
-  index.entries = index.entries.filter((entry) => entry.key !== options.key);
-  index.entries.push({
+  const nextEntry: PersistentCacheEntry = {
     key: options.key,
     id,
     size: bytes.byteLength,
     accessedAt: Date.now(),
-  });
+  };
+
+  index.entries = index.entries.filter((entry) => entry.key !== options.key);
+  index.entries.push(nextEntry);
 
   const { kept, evicted } = enforceLimits(index.entries, options.maxEntries, options.maxBytes);
   index.entries = kept;
@@ -369,9 +519,9 @@ function writeToLocalStorage(options: PersistentBinaryCacheOptions, bytes: Uint8
 
   try {
     writeLocalIndex(storage, options.namespace, index);
-    return true;
+    return nextEntry;
   } catch {
-    return false;
+    return null;
   }
 }
 
@@ -460,6 +610,7 @@ async function readFromOpfs(options: PersistentBinaryCacheOptions): Promise<Arra
     const data = await file.arrayBuffer();
     entry.accessedAt = Date.now();
     await writeOpfsIndex(directory, index);
+    await touchGlobalCacheEntry(options.namespace, options.key, 'opfs', entry.size);
     return data;
   } catch {
     index.entries = index.entries.filter((candidate) => candidate.key !== options.key);
@@ -472,10 +623,10 @@ async function readFromOpfs(options: PersistentBinaryCacheOptions): Promise<Arra
   }
 }
 
-async function writeToOpfs(options: PersistentBinaryCacheOptions, bytes: Uint8Array): Promise<boolean> {
+async function writeToOpfs(options: PersistentBinaryCacheOptions, bytes: Uint8Array): Promise<PersistentCacheEntry | null> {
   const directory = await getOpfsNamespaceDirectory(options.namespace, true);
   if (!directory) {
-    return false;
+    return null;
   }
 
   const index = await readOpfsIndex(directory);
@@ -487,20 +638,23 @@ async function writeToOpfs(options: PersistentBinaryCacheOptions, bytes: Uint8Ar
     if (typeof writable.truncate === 'function') {
       await writable.truncate(0);
     }
-    await writable.write(bytes);
+    const payload = new Uint8Array(bytes.byteLength);
+    payload.set(bytes);
+    await writable.write(payload);
     await writable.close();
   } catch {
-    return false;
+    return null;
   }
 
   const previous = index.entries.find((entry) => entry.key === options.key);
-  index.entries = index.entries.filter((entry) => entry.key !== options.key);
-  index.entries.push({
+  const nextEntry: PersistentCacheEntry = {
     key: options.key,
     id,
     size: bytes.byteLength,
     accessedAt: Date.now(),
-  });
+  };
+  index.entries = index.entries.filter((entry) => entry.key !== options.key);
+  index.entries.push(nextEntry);
 
   if (previous && previous.id !== id) {
     await removeOpfsEntry(directory, previous);
@@ -515,10 +669,175 @@ async function writeToOpfs(options: PersistentBinaryCacheOptions, bytes: Uint8Ar
 
   try {
     await writeOpfsIndex(directory, index);
-    return true;
+    return nextEntry;
   } catch {
-    return false;
+    return null;
   }
+}
+
+async function touchGlobalCacheEntry(
+  namespace: string,
+  key: string,
+  backend: CacheBackend,
+  size: number
+): Promise<void> {
+  const storage = getLocalStorageLike();
+  if (!storage) {
+    return;
+  }
+
+  await withGlobalWriteLock(async () => {
+    const index = readGlobalIndex(storage);
+    const match = index.entries.find(
+      (entry) =>
+        entry.namespace === namespace &&
+        entry.key === key &&
+        entry.backend === backend
+    );
+    if (!match) {
+      return;
+    }
+
+    match.accessedAt = Date.now();
+    match.size = size;
+    try {
+      await enforceAndPersistGlobalCacheIndex(storage, index);
+    } catch {
+      // Ignore metadata touch failures.
+    }
+  });
+}
+
+function removeLocalEntryByKeyAndId(
+  namespace: string,
+  key: string,
+  id: string
+): void {
+  const storage = getLocalStorageLike();
+  if (!storage) {
+    return;
+  }
+
+  const index = readLocalIndex(storage, namespace);
+  const target = index.entries.find((entry) => entry.key === key || entry.id === id);
+  if (!target) {
+    return;
+  }
+
+  removeLocalEntry(storage, namespace, target);
+  index.entries = index.entries.filter((entry) => entry.key !== target.key);
+  try {
+    writeLocalIndex(storage, namespace, index);
+  } catch {
+    // Ignore local index cleanup failures.
+  }
+}
+
+async function removeOpfsEntryByKeyAndId(
+  namespace: string,
+  key: string,
+  id: string
+): Promise<void> {
+  const directory = await getOpfsNamespaceDirectory(namespace, false);
+  if (!directory) {
+    return;
+  }
+
+  const index = await readOpfsIndex(directory);
+  const target = index.entries.find((entry) => entry.key === key || entry.id === id);
+  if (!target) {
+    return;
+  }
+
+  await removeOpfsEntry(directory, target);
+  index.entries = index.entries.filter((entry) => entry.key !== target.key);
+  try {
+    await writeOpfsIndex(directory, index);
+  } catch {
+    // Ignore opfs index cleanup failures.
+  }
+}
+
+function enforceGlobalLimitsOnEntries(
+  entries: GlobalCacheEntry[]
+): { kept: GlobalCacheEntry[]; evicted: GlobalCacheEntry[] } {
+  const limits = getGlobalCacheLimits();
+  if (limits.maxEntries <= 0 || limits.maxBytes <= 0) {
+    return {
+      kept: [],
+      evicted: [...entries],
+    };
+  }
+
+  const sorted = [...entries].sort((a, b) => a.accessedAt - b.accessedAt);
+  let totalBytes = sorted.reduce((sum, entry) => sum + entry.size, 0);
+  const evicted: GlobalCacheEntry[] = [];
+
+  while (sorted.length > limits.maxEntries || totalBytes > limits.maxBytes) {
+    const oldest = sorted.shift();
+    if (!oldest) {
+      break;
+    }
+    evicted.push(oldest);
+    totalBytes = Math.max(0, totalBytes - oldest.size);
+  }
+
+  return {
+    kept: sorted,
+    evicted,
+  };
+}
+
+async function enforceAndPersistGlobalCacheIndex(storage: StorageLike, index: GlobalCacheIndex): Promise<void> {
+  const deduped = new Map<string, GlobalCacheEntry>();
+  for (const entry of index.entries) {
+    const dedupeKey = `${entry.namespace}|${entry.key}|${entry.backend}`;
+    deduped.set(dedupeKey, entry);
+  }
+
+  const normalizedEntries = [...deduped.values()];
+  const { kept, evicted } = enforceGlobalLimitsOnEntries(normalizedEntries);
+  index.entries = kept;
+  writeGlobalIndex(storage, index);
+
+  for (const entry of evicted) {
+    if (entry.backend === 'local') {
+      removeLocalEntryByKeyAndId(entry.namespace, entry.key, entry.id);
+    } else {
+      await removeOpfsEntryByKeyAndId(entry.namespace, entry.key, entry.id);
+    }
+  }
+}
+
+async function recordGlobalCacheWrite(
+  namespace: string,
+  entry: PersistentCacheEntry,
+  backend: CacheBackend
+): Promise<void> {
+  const storage = getLocalStorageLike();
+  if (!storage) {
+    return;
+  }
+
+  const index = readGlobalIndex(storage);
+  index.entries = index.entries.filter(
+    (candidate) =>
+      !(
+        candidate.namespace === namespace &&
+        candidate.key === entry.key &&
+        candidate.backend === backend
+      )
+  );
+  index.entries.push({
+    namespace,
+    key: entry.key,
+    id: entry.id,
+    size: entry.size,
+    accessedAt: entry.accessedAt,
+    backend,
+  });
+
+  await enforceAndPersistGlobalCacheIndex(storage, index);
 }
 
 export async function readPersistentBinaryCache(
@@ -562,13 +881,19 @@ export async function writePersistentBinaryCache(
     return;
   }
 
-  await withNamespaceWriteLock(options.namespace, async () => {
-    const opfsStored = await writeToOpfs(options, bytes);
-    if (opfsStored) {
-      return;
-    }
+  await withGlobalWriteLock(async () => {
+    await withNamespaceWriteLock(options.namespace, async () => {
+      const opfsEntry = await writeToOpfs(options, bytes);
+      if (opfsEntry) {
+        await recordGlobalCacheWrite(options.namespace, opfsEntry, 'opfs');
+        return;
+      }
 
-    writeToLocalStorage(options, bytes);
+      const localEntry = writeToLocalStorage(options, bytes);
+      if (localEntry) {
+        await recordGlobalCacheWrite(options.namespace, localEntry, 'local');
+      }
+    });
   });
 }
 
@@ -606,6 +931,7 @@ function clearLocalStorageCache(namespace?: string): void {
 }
 
 export async function clearPersistentBinaryCacheForTests(namespace?: string): Promise<void> {
+  globalWriteLock = null;
   if (namespace) {
     namespaceWriteLocks.delete(namespace);
   } else {
@@ -613,6 +939,24 @@ export async function clearPersistentBinaryCacheForTests(namespace?: string): Pr
   }
 
   clearLocalStorageCache(namespace);
+  const storage = getLocalStorageLike();
+  if (storage) {
+    if (!namespace) {
+      try {
+        storage.removeItem(GLOBAL_INDEX_KEY);
+      } catch {
+        // ignore
+      }
+    } else {
+      const index = readGlobalIndex(storage);
+      index.entries = index.entries.filter((entry) => entry.namespace !== namespace);
+      try {
+        writeGlobalIndex(storage, index);
+      } catch {
+        // ignore
+      }
+    }
+  }
 
   const root = await getNavigatorStorageRoot();
   if (!root) {

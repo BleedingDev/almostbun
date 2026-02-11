@@ -15,6 +15,8 @@ const RUNNER_PATH_ALIASES = new Set([
 const PRE_CACHE_PATHS = [
   RUNNER_FALLBACK_PATH,
   '/repo-runner.webmanifest',
+  '/almostbun-sw.js',
+  '/__sw__.js',
 ];
 
 // Communication port with main thread
@@ -45,6 +47,9 @@ function isRunnerShellAssetRequest(request, url) {
   }
 
   if (url.pathname === '/__sw__.js') {
+    return true;
+  }
+  if (url.pathname === '/almostbun-sw.js') {
     return true;
   }
 
@@ -94,6 +99,7 @@ async function handleRunnerNavigationRequest(request) {
     const networkResponse = await fetch(request);
     if (networkResponse && networkResponse.ok) {
       await cache.put(request, networkResponse.clone());
+      await cache.put(RUNNER_FALLBACK_PATH, networkResponse.clone());
     }
     return networkResponse;
   } catch {

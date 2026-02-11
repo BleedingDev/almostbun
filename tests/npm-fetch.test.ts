@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { fetchWithRetry } from '../src/npm/fetch';
+import { __clearFetchResponseCacheForTests, fetchWithRetry } from '../src/npm/fetch';
 
 describe('npm fetch retries', () => {
   afterEach(() => {
     vi.restoreAllMocks();
+    __clearFetchResponseCacheForTests();
   });
 
   it('retries transient network errors and eventually succeeds', async () => {

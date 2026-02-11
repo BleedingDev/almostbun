@@ -8,7 +8,7 @@ import { __clearTarballDownloadCacheForTests } from '../src/npm/tarball';
 import { __clearFetchResponseCacheForTests } from '../src/npm/fetch';
 import { clearPersistentBinaryCacheForTests } from '../src/cache/persistent-binary-cache';
 
-describe('bootstrapGitHubProject', () => {
+describe('repo bootstrap project snapshot cache', () => {
   afterEach(async () => {
     vi.restoreAllMocks();
     __clearFetchResponseCacheForTests();
@@ -18,8 +18,10 @@ describe('bootstrapGitHubProject', () => {
     await clearPersistentBinaryCacheForTests();
   });
 
-  it('imports repo and installs dependencies in one flow', async () => {
-    const vfs = new VirtualFS();
+  it('restores repeated bootstrap runs from snapshot cache', async () => {
+    const firstVfs = new VirtualFS();
+    const secondVfs = new VirtualFS();
+
     const repoArchive = pako.gzip(
       createMinimalTarball({
         'package/package.json': JSON.stringify({
@@ -29,7 +31,7 @@ describe('bootstrapGitHubProject', () => {
             'tiny-pkg': '^1.0.0',
           },
         }),
-        'package/index.js': 'module.exports = require("tiny-pkg");',
+        'package/src/index.ts': 'export const value = 42;',
       })
     );
 
@@ -56,7 +58,7 @@ describe('bootstrapGitHubProject', () => {
       })
     );
 
-    vi.spyOn(globalThis, 'fetch').mockImplementation(async (url) => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (url) => {
       const urlStr = String(url);
       if (urlStr === 'https://codeload.github.com/acme/demo/tar.gz/HEAD') {
         return new Response(repoArchive, { status: 200 });
@@ -70,19 +72,29 @@ describe('bootstrapGitHubProject', () => {
       return new Response('not-found', { status: 404 });
     });
 
-    const result = await bootstrapGitHubProject(vfs, 'https://github.com/acme/demo');
+    const first = await bootstrapGitHubProject(firstVfs, 'https://github.com/acme/demo');
+    const firstNetworkCalls = fetchSpy.mock.calls.length;
+    expect(firstNetworkCalls).toBeGreaterThanOrEqual(3);
+    expect(first.installResult?.installed.get('tiny-pkg')?.version).toBe('1.2.0');
+    expect(firstVfs.existsSync('/project/node_modules/tiny-pkg/index.js')).toBe(true);
 
-    expect(result.rootPath).toBe('/project');
-    expect(result.projectPath).toBe('/project');
-    expect(result.installResult?.installed.get('tiny-pkg')?.version).toBe('1.2.0');
-    expect(vfs.existsSync('/project/node_modules/tiny-pkg/package.json')).toBe(true);
+    const second = await bootstrapGitHubProject(secondVfs, 'https://github.com/acme/demo');
+    expect(fetchSpy.mock.calls.length).toBe(firstNetworkCalls);
+    expect(second.installResult?.installed.get('tiny-pkg')?.version).toBe('1.2.0');
+    expect(secondVfs.existsSync('/project/node_modules/tiny-pkg/index.js')).toBe(true);
   });
 
-  it('supports skipInstall for clone-only flow', async () => {
-    const vfs = new VirtualFS();
+  it('supports bypass mode to disable snapshot read/write', async () => {
+    const firstVfs = new VirtualFS();
+    const secondVfs = new VirtualFS();
+
     const repoArchive = pako.gzip(
       createMinimalTarball({
-        'package/package.json': '{"name":"demo","version":"1.0.0"}',
+        'package/package.json': JSON.stringify({
+          name: 'demo-app',
+          version: '1.0.0',
+        }),
+        'package/index.js': 'console.log("hello");',
       })
     );
 
@@ -94,82 +106,99 @@ describe('bootstrapGitHubProject', () => {
       return new Response('not-found', { status: 404 });
     });
 
-    const result = await bootstrapGitHubProject(vfs, 'https://github.com/acme/demo', {
+    await bootstrapGitHubProject(firstVfs, 'https://github.com/acme/demo', {
+      skipInstall: true,
+      projectSnapshotCacheMode: 'bypass',
+    });
+
+    await bootstrapGitHubProject(secondVfs, 'https://github.com/acme/demo', {
       skipInstall: true,
     });
 
-    expect(result.installResult).toBeUndefined();
-    expect(vfs.existsSync('/project/package.json')).toBe(true);
-    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    expect(secondVfs.existsSync('/project/package.json')).toBe(true);
   });
 
-  it('transforms project TypeScript sources during bootstrap', async () => {
-    const vfs = new VirtualFS();
-    const repoArchive = pako.gzip(
-      createMinimalTarball({
-        'package/package.json': JSON.stringify({
-          name: 'ts-app',
-          version: '1.0.0',
-        }),
-        'package/src/constants.ts': `
-          export enum Env {
-            Development = "development",
-            Production = "production"
-          }
-        `,
-      })
-    );
-
-    vi.spyOn(globalThis, 'fetch').mockImplementation(async (url) => {
+  it('supports refresh mode to bypass read and rewrite cache', async () => {
+    let marker = 'v1';
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (url) => {
       const urlStr = String(url);
       if (urlStr === 'https://codeload.github.com/acme/demo/tar.gz/HEAD') {
-        return new Response(repoArchive, { status: 200 });
+        return new Response(toArrayBuffer(createRepoArchive(marker)), { status: 200 });
       }
       return new Response('not-found', { status: 404 });
     });
 
-    const result = await bootstrapGitHubProject(vfs, 'https://github.com/acme/demo');
+    const firstVfs = new VirtualFS();
+    await bootstrapGitHubProject(firstVfs, 'https://github.com/acme/demo', {
+      skipInstall: true,
+    });
+    expect(firstVfs.readFileSync('/project/marker.txt', 'utf8')).toBe('v1');
 
-    expect(result.transformedProjectFiles).toBeGreaterThan(0);
-    const transformed = vfs.readFileSync('/project/src/constants.ts', 'utf8');
-    expect(transformed).not.toContain('export enum');
-    expect(transformed).toContain('Development');
+    marker = 'v2';
+    const refreshedVfs = new VirtualFS();
+    await bootstrapGitHubProject(refreshedVfs, 'https://github.com/acme/demo', {
+      skipInstall: true,
+      projectSnapshotCacheMode: 'refresh',
+    });
+    expect(refreshedVfs.readFileSync('/project/marker.txt', 'utf8')).toBe('v2');
+
+    marker = 'v3';
+    const restoredVfs = new VirtualFS();
+    await bootstrapGitHubProject(restoredVfs, 'https://github.com/acme/demo', {
+      skipInstall: true,
+    });
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    expect(restoredVfs.readFileSync('/project/marker.txt', 'utf8')).toBe('v2');
   });
 
-  it('skips project source transform when transformProjectSources is false', async () => {
-    const vfs = new VirtualFS();
-    const repoArchive = pako.gzip(
-      createMinimalTarball({
-        'package/package.json': JSON.stringify({
-          name: 'ts-app',
-          version: '1.0.0',
-        }),
-        'package/src/constants.ts': `
-          export enum Env {
-            Development = "development",
-            Production = "production"
-          }
-        `,
-      })
-    );
-
-    vi.spyOn(globalThis, 'fetch').mockImplementation(async (url) => {
+  it('expires stale snapshots based on ttl', async () => {
+    let marker = 'ttl-1';
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (url) => {
       const urlStr = String(url);
       if (urlStr === 'https://codeload.github.com/acme/demo/tar.gz/HEAD') {
-        return new Response(repoArchive, { status: 200 });
+        return new Response(toArrayBuffer(createRepoArchive(marker)), { status: 200 });
       }
       return new Response('not-found', { status: 404 });
     });
 
-    const result = await bootstrapGitHubProject(vfs, 'https://github.com/acme/demo', {
-      transformProjectSources: false,
+    const firstVfs = new VirtualFS();
+    await bootstrapGitHubProject(firstVfs, 'https://github.com/acme/demo', {
+      skipInstall: true,
+      projectSnapshotCacheTtlMs: 1,
     });
+    expect(firstVfs.readFileSync('/project/marker.txt', 'utf8')).toBe('ttl-1');
 
-    expect(result.transformedProjectFiles ?? 0).toBe(0);
-    const source = vfs.readFileSync('/project/src/constants.ts', 'utf8');
-    expect(source).toContain('export enum Env');
+    await new Promise((resolve) => setTimeout(resolve, 5));
+
+    marker = 'ttl-2';
+    const secondVfs = new VirtualFS();
+    await bootstrapGitHubProject(secondVfs, 'https://github.com/acme/demo', {
+      skipInstall: true,
+      projectSnapshotCacheTtlMs: 1,
+    });
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    expect(secondVfs.readFileSync('/project/marker.txt', 'utf8')).toBe('ttl-2');
   });
 });
+
+function createRepoArchive(marker: string): Uint8Array {
+  return pako.gzip(
+    createMinimalTarball({
+      'package/package.json': JSON.stringify({
+        name: 'demo-app',
+        version: '1.0.0',
+      }),
+      'package/marker.txt': marker,
+    })
+  );
+}
+
+function toArrayBuffer(input: Uint8Array): ArrayBuffer {
+  const copy = new Uint8Array(input.byteLength);
+  copy.set(input);
+  return copy.buffer;
+}
 
 function createMinimalTarball(files: Record<string, string>): Uint8Array {
   const encoder = new TextEncoder();

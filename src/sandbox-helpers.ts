@@ -36,12 +36,19 @@ function getServiceWorkerContent(): string | null {
       dirname = __dirname;
     }
 
-    // Try dist directory first (when running from built package)
+    // Try colocated build artifact first
     let swPath = path.join(dirname, '__sw__.js');
     if (fs.existsSync(swPath)) {
       return fs.readFileSync(swPath, 'utf-8');
     }
-    // Try relative to src (when running from source)
+
+    // Try public source file (development from repository source tree)
+    swPath = path.join(dirname, '../public/__sw__.js');
+    if (fs.existsSync(swPath)) {
+      return fs.readFileSync(swPath, 'utf-8');
+    }
+
+    // Try dist directory (fallback when running from source)
     swPath = path.join(dirname, '../dist/__sw__.js');
     if (fs.existsSync(swPath)) {
       return fs.readFileSync(swPath, 'utf-8');

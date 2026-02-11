@@ -72,6 +72,12 @@ export class Registry {
         onRetry: () => {
           // no-op by default; callers can add progress hooks at a higher layer
         },
+        cache: {
+          namespace: 'npm-manifest',
+          scope: this.registryUrl,
+          key: packageName,
+          ttlMs: 30 * 60 * 1000,
+        },
       }
     );
 
@@ -132,7 +138,14 @@ export class Registry {
    * Download tarball as ArrayBuffer
    */
   async downloadTarball(tarballUrl: string): Promise<ArrayBuffer> {
-    const response = await fetchWithRetry(tarballUrl);
+    const response = await fetchWithRetry(tarballUrl, undefined, {
+      cache: {
+        namespace: 'npm-tarball-http',
+        scope: this.registryUrl,
+        key: tarballUrl,
+        ttlMs: 30 * 60 * 1000,
+      },
+    });
 
     if (!response.ok) {
       throw new Error(`Failed to download tarball: ${response.status}`);

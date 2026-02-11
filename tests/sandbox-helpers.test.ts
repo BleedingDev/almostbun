@@ -129,6 +129,7 @@ describe('Sandbox Helpers', () => {
       const files = generateSandboxFiles();
       expect(files['__sw__.js']).toBeDefined();
       expect(files['__sw__.js']).toContain('self');
+      expect(files['__sw__.js']).toContain('/almostbun-sw.js');
     });
 
     it('should not include service worker when disabled', () => {
