@@ -77,6 +77,18 @@ const PUBLIC_REPO_MATRIX: RepoMatrixCase[] = [
     skipInstall: true,
   },
   {
+    name: 'tanstack-start-basic',
+    url: 'https://github.com/TanStack/router/tree/main/examples/react/start-basic',
+    expectedKind: 'vite',
+    skipInstall: true,
+  },
+  {
+    name: 'tanstack-start-basic-static',
+    url: 'https://github.com/TanStack/router/tree/main/examples/react/start-basic-static',
+    expectedKind: 'vite',
+    skipInstall: true,
+  },
+  {
     name: 'nextjs-with-context-api',
     url: 'https://github.com/vercel/next.js/tree/canary/examples/with-context-api',
     expectedKind: 'next',
@@ -127,6 +139,18 @@ const PUBLIC_REPO_MATRIX: RepoMatrixCase[] = [
   {
     name: 'nextjs-with-static-export',
     url: 'https://github.com/vercel/next.js/tree/canary/examples/with-static-export',
+    expectedKind: 'next',
+    skipInstall: true,
+  },
+  {
+    name: 'nextjs-with-stitches',
+    url: 'https://github.com/vercel/next.js/tree/canary/examples/with-stitches',
+    expectedKind: 'next',
+    skipInstall: true,
+  },
+  {
+    name: 'nextjs-with-styled-components',
+    url: 'https://github.com/vercel/next.js/tree/canary/examples/with-styled-components',
     expectedKind: 'next',
     skipInstall: true,
   },
