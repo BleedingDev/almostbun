@@ -8,7 +8,7 @@ import { Runtime } from './runtime';
 import { NextDevServer } from './frameworks/next-dev-server';
 import { getServerBridge } from './server-bridge';
 import { Buffer } from './shims/stream';
-import { createAIChatbotProject } from './ai-chatbot-demo';
+import { createAIChatbotProject } from './vercel-ai-sdk-demo';
 
 // DOM elements
 const logsEl = document.getElementById('logs') as HTMLDivElement;
@@ -21,6 +21,9 @@ const apiKeyInput = document.getElementById('apiKey') as HTMLInputElement;
 const connectBtn = document.getElementById('connectBtn') as HTMLButtonElement;
 const connectionStatus = document.getElementById('connectionStatus') as HTMLDivElement;
 const connectionStatusText = document.getElementById('connectionStatusText') as HTMLSpanElement;
+const setupOverlay = document.getElementById('setupOverlay') as HTMLDivElement;
+const setupKeyInput = document.getElementById('setupKeyInput') as HTMLInputElement;
+const setupKeyBtn = document.getElementById('setupKeyBtn') as HTMLButtonElement;
 
 let serverUrl: string | null = null;
 let iframe: HTMLIFrameElement | null = null;
@@ -187,6 +190,9 @@ async function main() {
     iframe.src = serverUrl;
     iframe.id = 'preview-iframe';
     iframe.name = 'preview-iframe';
+    iframe.style.width = '100%';
+    iframe.style.height = '100%';
+    iframe.style.border = 'none';
     iframe.setAttribute('sandbox', 'allow-forms allow-scripts allow-same-origin allow-popups allow-pointer-lock allow-modals allow-downloads allow-orientation-lock allow-presentation allow-popups-to-escape-sandbox');
 
     iframe.onload = () => {
@@ -228,9 +234,26 @@ async function main() {
       }
     };
 
+    // Setup overlay dialog
+    setupKeyInput.oninput = () => {
+      setupKeyBtn.disabled = !setupKeyInput.value.trim();
+    };
+    setupKeyBtn.onclick = () => {
+      const key = setupKeyInput.value.trim();
+      if (key) {
+        configureApiKey(key);
+        setupOverlay.classList.add('hidden');
+      }
+    };
+    setupKeyInput.onkeydown = (e) => {
+      if (e.key === 'Enter' && setupKeyInput.value.trim()) {
+        configureApiKey(setupKeyInput.value.trim());
+        setupOverlay.classList.add('hidden');
+      }
+    };
+
     log('Demo ready!', 'success');
-    log('Enter your OpenAI API key and click Connect to start chatting.');
-    log('Note: API calls go through a CORS proxy (corsproxy.io)');
+    log('Enter your OpenAI API key to start chatting.');
 
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);

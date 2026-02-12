@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.13] - 2026-02-12
+
+### Added
+- **Centralized CDN configuration** (`src/config/cdn.ts`): Single source of truth for esm.sh, unpkg, and other CDN URLs used across the codebase
+- **esm.sh version resolution**: `redirectNpmImports` now reads `package.json` dependencies and includes the major version in esm.sh URLs (e.g. `ai@4/react`), fixing 404s on subpath imports
+- **Setup overlay dialogs**: Convex and Vercel AI SDK demos now show an API key setup dialog on load with privacy notice ("your key stays in your browser")
+- **New tests**: `tests/cdn-config.test.ts` (12 tests) and `tests/code-transforms.test.ts` (11 tests)
+
+### Changed
+- Renamed AI chatbot demo files: `demo-ai-chatbot.html` → `demo-vercel-ai-sdk.html`, `ai-chatbot-demo.ts` → `vercel-ai-sdk-demo.ts`
+- Replaced hardcoded CDN URLs throughout codebase with imports from `src/config/cdn.ts`
+
+### Removed
+- **`sentry` shim** (`src/shims/sentry.ts`): Was a no-op stub for a non-existent Node.js built-in
+- **Custom `convex` command** in `child_process.ts`: Convex now runs through the generic bin stub system like any other CLI tool
+- **Convex-specific path remaps** in `fs.ts`: `path.resolve()` with correct `cwd` handles this generically
+- **`vfs:` prefix stripping** in `fs.ts`: Moved to esbuild shim where the artifact originates
+
 ## [0.2.12] - 2026-02-12
 
 ### Added

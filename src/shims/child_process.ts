@@ -318,60 +318,6 @@ export function initChildProcess(vfs: VirtualFS): void {
     }
   });
 
-  // Create custom 'convex' command that runs the Convex CLI
-  const convexCommand = defineCommand('convex', async (args, ctx) => {
-    if (!currentVfs) {
-      return { stdout: '', stderr: 'VFS not initialized\n', exitCode: 1 };
-    }
-
-    // Find the Convex CLI bundle
-    const cliBundlePath = '/node_modules/convex/dist/cli.bundle.cjs';
-    if (!currentVfs.existsSync(cliBundlePath)) {
-      return { stdout: '', stderr: 'Convex CLI not found. Run: npm install convex\n', exitCode: 1 };
-    }
-
-    let stdout = '';
-    let stderr = '';
-
-    try {
-      // Create a runtime with the current environment
-      const runtime = new Runtime(currentVfs, {
-        cwd: ctx.cwd,
-        env: ctx.env,
-        onConsole: (method, consoleArgs) => {
-          const msg = consoleArgs.map(a => String(a)).join(' ') + '\n';
-          if (method === 'error') {
-            stderr += msg;
-          } else {
-            stdout += msg;
-          }
-        },
-      });
-
-      // Set up process.argv for the CLI
-      const processShim = (globalThis as any).process || {};
-      const originalArgv = processShim.argv;
-      const originalEnv = { ...processShim.env };
-
-      processShim.argv = ['node', 'convex', ...args];
-      processShim.env = { ...processShim.env, ...ctx.env };
-      (globalThis as any).process = processShim;
-
-      try {
-        // Run the CLI bundle
-        runtime.runFile(cliBundlePath);
-        return { stdout, stderr, exitCode: 0 };
-      } finally {
-        // Restore original state
-        processShim.argv = originalArgv;
-        processShim.env = originalEnv;
-      }
-    } catch (error) {
-      const errorMsg = error instanceof Error ? error.message : String(error);
-      return { stdout, stderr: stderr + `Error: ${errorMsg}\n`, exitCode: 1 };
-    }
-  });
-
   // Create custom 'npm' command that runs scripts from package.json
   const npmCommand = defineCommand('npm', async (args, ctx) => {
     if (!currentVfs) {
@@ -423,7 +369,7 @@ export function initChildProcess(vfs: VirtualFS): void {
       PATH: '/usr/local/bin:/usr/bin:/bin:/node_modules/.bin',
       NODE_ENV: 'development',
     },
-    customCommands: [nodeCommand, convexCommand, npmCommand],
+    customCommands: [nodeCommand, npmCommand],
   });
 }
 

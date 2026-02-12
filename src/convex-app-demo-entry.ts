@@ -29,6 +29,9 @@ const saveBtn = document.getElementById('saveBtn') as HTMLButtonElement;
 const watchModeCheckbox = document.getElementById('watchModeCheckbox') as HTMLInputElement;
 const watchModeLabel = document.getElementById('watchModeLabel') as HTMLLabelElement;
 const watchModeText = document.getElementById('watchModeText') as HTMLSpanElement;
+const setupOverlay = document.getElementById('setupOverlay') as HTMLDivElement;
+const setupKeyInput = document.getElementById('setupKeyInput') as HTMLInputElement;
+const setupKeyBtn = document.getElementById('setupKeyBtn') as HTMLButtonElement;
 
 let serverUrl: string | null = null;
 let iframe: HTMLIFrameElement | null = null;
@@ -1174,6 +1177,9 @@ async function main() {
     iframe.src = serverUrl;
     iframe.id = 'preview-iframe';
     iframe.name = 'preview-iframe';
+    iframe.style.width = '100%';
+    iframe.style.height = '100%';
+    iframe.style.border = 'none';
     // Sandbox the iframe for security - postMessage-based HMR works with sandboxed iframes
     iframe.setAttribute('sandbox', 'allow-forms allow-scripts allow-same-origin allow-popups allow-pointer-lock allow-modals allow-downloads allow-orientation-lock allow-presentation allow-popups-to-escape-sandbox');
 
@@ -1284,6 +1290,25 @@ async function main() {
         }
       } else {
         stopConvexWatcher();
+      }
+    };
+
+    // Setup overlay dialog
+    setupKeyInput.oninput = () => {
+      setupKeyBtn.disabled = !setupKeyInput.value.trim();
+    };
+    const handleSetupDeploy = () => {
+      const key = setupKeyInput.value.trim();
+      if (key) {
+        convexKeyInput.value = key;
+        setupOverlay.classList.add('hidden');
+        deployBtn.click();
+      }
+    };
+    setupKeyBtn.onclick = handleSetupDeploy;
+    setupKeyInput.onkeydown = (e) => {
+      if (e.key === 'Enter' && setupKeyInput.value.trim()) {
+        handleSetupDeploy();
       }
     };
 

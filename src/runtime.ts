@@ -50,7 +50,7 @@ import * as inspectorShim from './shims/inspector';
 import * as asyncHooksShim from './shims/async_hooks';
 import * as domainShim from './shims/domain';
 import * as diagnosticsChannelShim from './shims/diagnostics_channel';
-import * as sentryShim from './shims/sentry';
+
 import assertShim from './shims/assert';
 import { resolve as resolveExports, imports as resolveImports } from 'resolve.exports';
 import { transformEsmToCjsSimple } from './frameworks/code-transforms';
@@ -414,9 +414,6 @@ const builtinModules: Record<string, unknown> = {
     setImmediate: (value?: unknown) => new Promise(resolve => setTimeout(() => resolve(value), 0)),
     scheduler: { wait: (ms: number) => new Promise(resolve => setTimeout(resolve, ms)) },
   },
-  // Sentry SDK (no-op since error tracking isn't useful in browser runtime)
-  '@sentry/node': sentryShim,
-  '@sentry/core': sentryShim,
 };
 
 /**
@@ -874,11 +871,6 @@ ${code}
     if (id === 'prettier' || id.startsWith('prettier/')) {
       return builtinModules['prettier'];
     }
-    // Intercept Sentry - SDK tries to monkey-patch http which doesn't work
-    if (id.startsWith('@sentry/')) {
-      return builtinModules['@sentry/node'];
-    }
-
     const resolved = resolveModule(id, currentDir);
 
     // If resolved to a built-in name (shouldn't happen but safety check)
@@ -897,9 +889,6 @@ ${code}
     }
     if (resolved.includes('/node_modules/prettier/')) {
       return builtinModules['prettier'];
-    }
-    if (resolved.includes('/node_modules/@sentry/')) {
-      return builtinModules['@sentry/node'];
     }
 
     return loadModule(resolved).exports;

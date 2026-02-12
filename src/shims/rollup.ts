@@ -6,6 +6,7 @@
  */
 
 import * as acorn from 'acorn';
+import { ROLLUP_BROWSER_CDN, ROLLUP_BROWSER_VERSION } from '../config/cdn';
 
 // Rollup instance loaded from CDN
 let rollupInstance: unknown = null;
@@ -23,7 +24,7 @@ async function loadRollup(): Promise<unknown> {
       // Load @rollup/browser from CDN
       const rollup = await import(
         /* @vite-ignore */
-        'https://esm.sh/@rollup/browser@4.9.0'
+        ROLLUP_BROWSER_CDN
       );
       rollupInstance = rollup;
       console.log('[rollup] Browser version loaded');
@@ -41,7 +42,7 @@ async function loadRollup(): Promise<unknown> {
 // For synchronous require(), we need a stub that works before async load
 // This will be replaced when loadRollup() is called
 
-export const VERSION = '4.9.0';
+export const VERSION = ROLLUP_BROWSER_VERSION;
 
 export async function rollup(options: unknown): Promise<unknown> {
   const r = await loadRollup() as { rollup: (options: unknown) => Promise<unknown> };

@@ -8,6 +8,7 @@ import { VirtualFS } from '../virtual-fs';
 import { Buffer } from '../shims/stream';
 import { simpleHash } from '../utils/hash';
 import { addReactRefresh as _addReactRefresh } from './code-transforms';
+import { ESBUILD_WASM_ESM_CDN, ESBUILD_WASM_BINARY_CDN, REACT_REFRESH_CDN } from '../config/cdn';
 
 // Check if we're in a real browser environment (not jsdom or Node.js)
 // jsdom has window but doesn't have ServiceWorker or SharedArrayBuffer
@@ -38,14 +39,14 @@ async function initEsbuild(): Promise<void> {
     try {
       const mod = await import(
         /* @vite-ignore */
-        'https://esm.sh/esbuild-wasm@0.20.0'
+        ESBUILD_WASM_ESM_CDN
       );
 
       const esbuildMod = mod.default || mod;
 
       try {
         await esbuildMod.initialize({
-          wasmURL: 'https://unpkg.com/esbuild-wasm@0.20.0/esbuild.wasm',
+          wasmURL: ESBUILD_WASM_BINARY_CDN,
         });
         console.log('[ViteDevServer] esbuild-wasm initialized');
       } catch (initError) {
@@ -106,7 +107,7 @@ const REACT_REFRESH_PREAMBLE = `
 <script type="module">
 // Block until React Refresh is loaded and initialized
 // This MUST happen before React is imported
-const RefreshRuntime = await import('https://esm.sh/react-refresh@0.14.0/runtime').then(m => m.default || m);
+const RefreshRuntime = await import('${REACT_REFRESH_CDN}').then(m => m.default || m);
 
 // Hook into React BEFORE it's loaded
 RefreshRuntime.injectIntoGlobalHook(window);

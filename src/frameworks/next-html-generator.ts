@@ -12,6 +12,7 @@ import {
   REACT_REFRESH_PREAMBLE,
   HMR_CLIENT_SCRIPT,
 } from './next-shims';
+import { REACT_CDN, REACT_DOM_CDN } from '../config/cdn';
 
 /** Resolved App Router route with page, layouts, and UI convention files */
 export interface AppRoute {
@@ -29,6 +30,8 @@ export interface HtmlGeneratorContext {
   exists: (path: string) => boolean;
   generateEnvScript: () => string;
   loadTailwindConfigIfNeeded: () => Promise<string>;
+  /** Additional import map entries (e.g., framework-specific CDN mappings) */
+  additionalImportMap?: Record<string, string>;
 }
 
 /**
@@ -69,6 +72,13 @@ export async function generateAppRouterHtml(
     nestedJsx = `React.createElement(Layout${i}, null, ${nestedJsx})`;
   }
 
+  // Build additional import map entries from context
+  const additionalImportMapEntries = ctx.additionalImportMap
+    ? ',' + Object.entries(ctx.additionalImportMap)
+        .map(([key, value]) => `\n      "${key}": "${value}"`)
+        .join(',')
+    : '';
+
   // Generate env script for NEXT_PUBLIC_* variables
   const envScript = ctx.generateEnvScript();
 
@@ -90,18 +100,11 @@ export async function generateAppRouterHtml(
   <script type="importmap">
   {
     "imports": {
-      "react": "https://esm.sh/react@18.2.0?dev",
-      "react/": "https://esm.sh/react@18.2.0&dev/",
-      "react-dom": "https://esm.sh/react-dom@18.2.0?dev",
-      "react-dom/": "https://esm.sh/react-dom@18.2.0&dev/",
-      "react-dom/client": "https://esm.sh/react-dom@18.2.0/client?dev",
-      "convex/react": "https://esm.sh/convex@1.21.0/react?external=react",
-      "convex/server": "https://esm.sh/convex@1.21.0/server",
-      "convex/values": "https://esm.sh/convex@1.21.0/values",
-      "convex/_generated/api": "${virtualPrefix}/convex/_generated/api.ts",
-      "ai": "https://esm.sh/ai@4?external=react",
-      "ai/react": "https://esm.sh/ai@4/react?external=react",
-      "@ai-sdk/openai": "https://esm.sh/@ai-sdk/openai@1",
+      "react": "${REACT_CDN}?dev",
+      "react/": "${REACT_CDN}&dev/",
+      "react-dom": "${REACT_DOM_CDN}?dev",
+      "react-dom/": "${REACT_DOM_CDN}&dev/",
+      "react-dom/client": "${REACT_DOM_CDN}/client?dev",${additionalImportMapEntries}
       "next/link": "${virtualPrefix}/_next/shims/link.js",
       "next/router": "${virtualPrefix}/_next/shims/router.js",
       "next/head": "${virtualPrefix}/_next/shims/head.js",
@@ -445,6 +448,13 @@ export async function generatePageHtml(
   // Load Tailwind config if available (must be injected BEFORE CDN script)
   const tailwindConfigScript = await ctx.loadTailwindConfigIfNeeded();
 
+  // Build additional import map entries from context
+  const pagesAdditionalEntries = ctx.additionalImportMap
+    ? ',' + Object.entries(ctx.additionalImportMap)
+        .map(([key, value]) => `\n      "${key}": "${value}"`)
+        .join(',')
+    : '';
+
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -460,11 +470,11 @@ export async function generatePageHtml(
   <script type="importmap">
   {
     "imports": {
-      "react": "https://esm.sh/react@18.2.0?dev",
-      "react/": "https://esm.sh/react@18.2.0&dev/",
-      "react-dom": "https://esm.sh/react-dom@18.2.0?dev",
-      "react-dom/": "https://esm.sh/react-dom@18.2.0&dev/",
-      "react-dom/client": "https://esm.sh/react-dom@18.2.0/client?dev",
+      "react": "${REACT_CDN}?dev",
+      "react/": "${REACT_CDN}&dev/",
+      "react-dom": "${REACT_DOM_CDN}?dev",
+      "react-dom/": "${REACT_DOM_CDN}&dev/",
+      "react-dom/client": "${REACT_DOM_CDN}/client?dev",${pagesAdditionalEntries}
       "next/link": "${virtualPrefix}/_next/shims/link.js",
       "next/router": "${virtualPrefix}/_next/shims/router.js",
       "next/head": "${virtualPrefix}/_next/shims/head.js",

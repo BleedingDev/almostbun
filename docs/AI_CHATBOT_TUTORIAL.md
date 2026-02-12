@@ -1,6 +1,6 @@
-# Just Node + AI Chatbot Tutorial
+# almostnode — AI Chatbot Tutorial
 
-Build a streaming AI chatbot entirely in the browser using Just Node's virtual Node.js runtime, Next.js, and Vercel AI SDK.
+Build a streaming AI chatbot entirely in the browser using almostnode's virtual Node.js runtime, Next.js, and Vercel AI SDK.
 
 ## Table of Contents
 
@@ -45,7 +45,7 @@ All code runs client-side - no backend server required.
    npm run dev
    ```
 
-2. Open `http://localhost:5173/examples/demo-ai-chatbot.html`
+2. Open `http://localhost:5173/examples/demo-vercel-ai-sdk.html`
 
 3. Enter your OpenAI API key and click "Connect"
 
@@ -460,4 +460,4 @@ for (const chunk of chunks) {
 - [Vercel AI SDK Documentation](https://sdk.vercel.ai/docs)
 - [OpenAI API Reference](https://platform.openai.com/docs/api-reference)
 - [Next.js App Router](https://nextjs.org/docs/app)
-- [Just Node API Documentation](./API.md)
+- [almostnode API Documentation](../README.md#api-reference)

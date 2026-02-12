@@ -4,6 +4,7 @@
  */
 
 import type { VirtualFS } from '../virtual-fs';
+import { ESBUILD_WASM_BINARY_CDN, ESBUILD_WASM_BROWSER_CDN } from '../config/cdn';
 
 // ============================================================================
 // Type Definitions
@@ -102,6 +103,7 @@ export interface BuildResult {
   errors: unknown[];
   warnings: unknown[];
   outputFiles?: Array<{ path: string; contents: Uint8Array; text: string }>;
+  metafile?: { inputs?: Record<string, unknown>; outputs?: Record<string, unknown> };
 }
 
 // Window.__esbuild type is declared in src/types/external.d.ts
@@ -114,13 +116,15 @@ export interface BuildResult {
  * The priority order for export conditions when resolving package exports.
  *
  * Order rationale:
- * 1. "convex" - Framework-specific condition for Convex packages (highest priority)
- * 2. "module" - ESM entry point (preferred for modern bundlers)
- * 3. "import" - ESM import condition (standard Node.js condition)
- * 4. "require" - CJS require condition (fallback for CommonJS)
- * 5. "default" - Fallback condition (lowest priority)
+ * 1. "module" - ESM entry point (preferred for modern bundlers)
+ * 2. "import" - ESM import condition (standard Node.js condition)
+ * 3. "require" - CJS require condition (fallback for CommonJS)
+ * 4. "default" - Fallback condition (lowest priority)
+ *
+ * Packages with custom conditions (e.g. "convex", "react-native") will
+ * fall through to one of these standard conditions.
  */
-const EXPORT_CONDITION_PRIORITY = ['convex', 'module', 'import', 'require', 'default'] as const;
+const EXPORT_CONDITION_PRIORITY = ['module', 'import', 'require', 'default'] as const;
 
 /**
  * Resolves a package.json exports entry to a file path by evaluating export conditions.
@@ -389,7 +393,7 @@ function resolveMainImport(
 // State
 let esbuildInstance: typeof import('esbuild-wasm') | null = null;
 let initPromise: Promise<void> | null = null;
-let wasmURL = 'https://unpkg.com/esbuild-wasm@0.20.0/esbuild.wasm';
+let wasmURL = ESBUILD_WASM_BINARY_CDN;
 let globalVFS: VirtualFS | null = null;
 
 /**
@@ -439,7 +443,7 @@ export async function initialize(options?: { wasmURL?: string }): Promise<void> 
       // Dynamically import esbuild-wasm from CDN
       const esbuild = await import(
         /* @vite-ignore */
-        'https://unpkg.com/esbuild-wasm@0.20.0/esm/browser.min.js'
+        ESBUILD_WASM_BROWSER_CDN
       );
 
       await esbuild.initialize({
@@ -521,14 +525,10 @@ export async function transformToCommonJS(
 // ============================================================================
 
 /**
- * Apply path remapping for VFS (e.g., /convex/ -> /project/convex/)
- * This keeps the original path for esbuild output naming but finds the actual file.
+ * Apply path remapping for VFS.
+ * Currently a passthrough — no remapping needed.
  */
 function remapVFSPath(path: string): string {
-  // Remap /convex/ to /project/convex/
-  if (path === '/convex' || path.startsWith('/convex/')) {
-    return '/project' + path;
-  }
   return path;
 }
 
@@ -712,9 +712,9 @@ export async function build(options: BuildOptions): Promise<BuildResult> {
     plugins.unshift(vfsPlugin);
   }
 
-  // Resolve entry points to absolute paths (but DON'T remap /convex/ to /project/convex/)
-  // The path remapping happens in the VFS plugin's onLoad handler instead.
-  // This preserves the original paths for esbuild's output file naming.
+  // Resolve entry points to absolute paths.
+  // Path remapping (if any) happens in the VFS plugin's onLoad handler instead,
+  // preserving the original paths for esbuild's output file naming.
   let entryPoints = options.entryPoints;
   if (entryPoints && globalVFS) {
     const absWorkingDir = options.absWorkingDir || (typeof globalThis !== 'undefined' && globalThis.process && typeof globalThis.process.cwd === 'function' ? globalThis.process.cwd() : '/');
@@ -760,12 +760,26 @@ export async function build(options: BuildOptions): Promise<BuildResult> {
     absWorkingDir: resolvedAbsWorkingDir,
   }) as BuildResult;
 
-  // Strip 'vfs:' namespace prefix from output file paths
-  // The namespace prefix causes issues when the CLI uses these paths
+  // Strip 'vfs:' namespace prefix from all output paths.
+  // esbuild-wasm may prefix paths with the plugin namespace; strip it everywhere.
   if (result.outputFiles) {
     for (const file of result.outputFiles) {
       if (file.path.includes('vfs:')) {
         file.path = file.path.replace(/vfs:/g, '');
+      }
+    }
+  }
+  if (result.metafile) {
+    const meta = result.metafile as { inputs?: Record<string, unknown>; outputs?: Record<string, unknown> };
+    for (const key of ['inputs', 'outputs'] as const) {
+      const obj = meta[key];
+      if (obj) {
+        for (const k of Object.keys(obj)) {
+          if (k.includes('vfs:')) {
+            obj[k.replace(/vfs:/g, '')] = obj[k];
+            delete obj[k];
+          }
+        }
       }
     }
   }

@@ -941,6 +941,22 @@ triggerHMR('/app/page.tsx', iframe);
 
 ---
 
+## Demos
+
+Start the dev server with `npm run dev` and open any demo at `http://localhost:5173`:
+
+| Demo | Path | Description |
+|------|------|-------------|
+| **Next.js** | `/examples/next-demo.html` | Pages & App Router, CSS modules, route groups, API routes, HMR |
+| **Vite** | `/examples/vite-demo.html` | Vite dev server with React and HMR |
+| **Vitest** | `/examples/vitest-demo.html` | Real vitest execution with xterm.js terminal and watch mode |
+| **Express** | `/examples/express-demo.html` | Express.js HTTP server running in the browser |
+| **Convex** | `/examples/demo-convex-app.html` | Real-time todo app with Convex cloud deployment |
+| **Vercel AI SDK** | `/examples/demo-vercel-ai-sdk.html` | Streaming AI chatbot with Next.js and OpenAI |
+| **Bash** | `/examples/bash-demo.html` | Interactive POSIX shell emulator |
+
+---
+
 ## Development
 
 ### Setup
@@ -967,7 +983,7 @@ npm run test:e2e
 npm run dev
 ```
 
-Open `http://localhost:5173/examples/next-demo.html` to see the Next.js demo.
+See the [Demos](#demos) section for all available examples.
 
 ---
 

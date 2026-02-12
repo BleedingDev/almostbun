@@ -158,39 +158,6 @@ function createBuffer(data: Uint8Array): Buffer {
  * Convert a path-like value to a string path
  * Handles URL objects (file:// protocol) and Buffer
  */
-// Path remapping for CLI tools that use incorrect absolute paths
-// This maps /convex/ -> /project/convex/ to fix the Convex CLI path issue
-const pathRemaps: Array<{ from: string; to: string }> = [
-  { from: '/convex/', to: '/project/convex/' },
-];
-
-function remapPath(path: string): string {
-  // Strip 'vfs:' namespace prefix from paths (comes from esbuild namespace)
-  if (path.includes('vfs:')) {
-    const cleanPath = path.replace(/vfs:/g, '');
-    if (!remapPath.logged) remapPath.logged = new Set();
-    if (!remapPath.logged.has(path)) {
-      console.log(`[fs] Stripping vfs: prefix: ${path} -> ${cleanPath}`);
-      remapPath.logged.add(path);
-    }
-    path = cleanPath;
-  }
-
-  for (const remap of pathRemaps) {
-    if (path === remap.from.slice(0, -1) || path.startsWith(remap.from)) {
-      const remapped = remap.to + path.slice(remap.from.length);
-      // Only log once per unique path to avoid noise
-      if (!remapPath.logged) remapPath.logged = new Set();
-      if (!remapPath.logged.has(path)) {
-        console.log(`[fs] Remapping path: ${path} -> ${remapped}`);
-        remapPath.logged.add(path);
-      }
-      return remapped;
-    }
-  }
-  return path;
-}
-remapPath.logged = new Set<string>();
 
 function toPath(pathLike: unknown, getCwd?: () => string): string {
   let path: string;
@@ -218,9 +185,6 @@ function toPath(pathLike: unknown, getCwd?: () => string): string {
     const cwd = getCwd();
     path = cwd.endsWith('/') ? cwd + path : cwd + '/' + path;
   }
-
-  // Apply path remapping for CLI tools that use incorrect absolute paths
-  path = remapPath(path);
 
   return path;
 }
@@ -464,10 +428,6 @@ export function createFsShim(vfs: VirtualFS, getCwd?: () => string): FsShim {
         return;
       }
       const path = resolvePath(pathLike);
-      // Debug: Log when writing to convex directories
-      if (path.includes('convex') || path.includes('_generated')) {
-        console.log('[fs] writeFileSync:', path);
-      }
       vfs.writeFileSync(path, data);
     },
 
@@ -477,10 +437,6 @@ export function createFsShim(vfs: VirtualFS, getCwd?: () => string): FsShim {
 
     mkdirSync(pathLike: unknown, options?: { recursive?: boolean }): void {
       const path = resolvePath(pathLike);
-      // Debug: Log when creating convex directories
-      if (path.includes('convex') || path.includes('_generated')) {
-        console.log('[fs] mkdirSync:', path, options);
-      }
       vfs.mkdirSync(path, options);
     },
 

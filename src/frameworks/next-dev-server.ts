@@ -50,6 +50,7 @@ import {
   createBuiltinModules,
   executeApiHandler,
 } from './next-api-handler';
+import { ESBUILD_WASM_ESM_CDN, ESBUILD_WASM_BINARY_CDN } from '../config/cdn';
 
 // Check if we're in a real browser environment (not jsdom or Node.js)
 const isBrowser = typeof window !== 'undefined' &&
@@ -76,14 +77,14 @@ async function initEsbuild(): Promise<void> {
     try {
       const mod = await import(
         /* @vite-ignore */
-        'https://esm.sh/esbuild-wasm@0.20.0'
+        ESBUILD_WASM_ESM_CDN
       );
 
       const esbuildMod = mod.default || mod;
 
       try {
         await esbuildMod.initialize({
-          wasmURL: 'https://unpkg.com/esbuild-wasm@0.20.0/esbuild.wasm',
+          wasmURL: ESBUILD_WASM_BINARY_CDN,
         });
         console.log('[NextDevServer] esbuild-wasm initialized');
       } catch (initError) {
@@ -124,6 +125,10 @@ export interface NextDevServerOptions extends DevServerOptions {
   assetPrefix?: string;
   /** Base path for the app (e.g., '/docs'). Auto-detected from next.config if not specified. */
   basePath?: string;
+  /** Additional import map entries for the generated HTML (e.g., CDN URLs for framework packages) */
+  additionalImportMap?: Record<string, string>;
+  /** Additional packages that should NOT be redirected to esm.sh CDN (e.g., packages in the import map) */
+  additionalLocalPackages?: string[];
 }
 
 /**
@@ -996,6 +1001,7 @@ export class NextDevServer extends DevServer {
       exists: (path: string) => this.exists(path),
       generateEnvScript: () => this.generateEnvScript(),
       loadTailwindConfigIfNeeded: () => this.loadTailwindConfigIfNeeded(),
+      additionalImportMap: this.options.additionalImportMap,
     };
   }
 
@@ -1138,8 +1144,25 @@ export class NextDevServer extends DevServer {
     return codeWithCdnImports;
   }
 
+  /** Cached dependency versions from package.json */
+  private _dependencies: Record<string, string> | undefined;
+
+  private getDependencies(): Record<string, string> {
+    if (this._dependencies) return this._dependencies;
+    let deps: Record<string, string> = {};
+    try {
+      const pkgPath = `${this.root}/package.json`;
+      if (this.vfs.existsSync(pkgPath)) {
+        const pkg = JSON.parse(this.vfs.readFileSync(pkgPath, 'utf-8'));
+        deps = { ...pkg.dependencies, ...pkg.devDependencies };
+      }
+    } catch { /* ignore parse errors */ }
+    this._dependencies = deps;
+    return deps;
+  }
+
   private redirectNpmImports(code: string): string {
-    return _redirectNpmImports(code);
+    return _redirectNpmImports(code, this.options.additionalLocalPackages, this.getDependencies());
   }
 
   private stripCssImports(code: string, currentFile?: string): string {

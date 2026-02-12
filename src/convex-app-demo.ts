@@ -1,8 +1,8 @@
 /**
- * Realistic Next.js + Convex App Demo
+ * Next.js + Convex Todo App Demo
  *
- * This demo creates a more realistic Next.js application structure
- * with Radix UI components, Tailwind CSS, and a mocked Convex backend.
+ * A simple todo list app using Next.js App Router and Convex for real-time data sync,
+ * running entirely in the browser.
  */
 
 import { VirtualFS } from './virtual-fs';
@@ -16,7 +16,7 @@ import { PackageManager, InstallOptions, InstallResult } from './npm';
  * Package.json for a realistic Next.js + Convex app
  */
 const PACKAGE_JSON = {
-  name: "convex-app-demo",
+  name: "convex-todo-app",
   version: "0.1.0",
   private: true,
   scripts: {
@@ -25,18 +25,9 @@ const PACKAGE_JSON = {
     start: "next start",
   },
   dependencies: {
-    // Core
     "next": "^14.0.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
-    // UI
-    "clsx": "^2.1.1",
-    "tailwind-merge": "^3.1.0",
-    "lucide-react": "^0.400.0",
-    // Forms
-    "zod": "^3.24.2",
-    // Date
-    "date-fns": "^3.6.0",
   },
   devDependencies: {
     "@types/node": "^20",
@@ -49,12 +40,7 @@ const PACKAGE_JSON = {
 /**
  * Minimal packages to install for demo (others loaded from CDN)
  */
-const DEMO_PACKAGES = [
-  'clsx',
-  'tailwind-merge',
-  'zod',
-  'date-fns',
-];
+const DEMO_PACKAGES: string[] = [];
 
 /**
  * Create the project structure in the virtual filesystem
@@ -65,10 +51,7 @@ export function createConvexAppProject(vfs: VirtualFS): void {
 
   // Create directories - App Router structure
   vfs.mkdirSync('/app', { recursive: true });
-  vfs.mkdirSync('/app/api', { recursive: true });
-  vfs.mkdirSync('/app/tasks', { recursive: true });
   vfs.mkdirSync('/components', { recursive: true });
-  vfs.mkdirSync('/components/ui', { recursive: true });
   vfs.mkdirSync('/lib', { recursive: true });
   vfs.mkdirSync('/convex', { recursive: true });
   vfs.mkdirSync('/public', { recursive: true });
@@ -102,121 +85,60 @@ export function createConvexAppProject(vfs: VirtualFS): void {
     exclude: ["node_modules"]
   }, null, 2));
 
-  // Create Tailwind config
-  vfs.writeFileSync('/tailwind.config.js', `/** @type {import('tailwindcss').Config} */
-module.exports = {
-  darkMode: ["class"],
-  content: [
-    './app/**/*.{js,ts,jsx,tsx,mdx}',
-    './components/**/*.{js,ts,jsx,tsx,mdx}',
-  ],
-  theme: {
-    extend: {
-      colors: {
-        border: "hsl(var(--border))",
-        background: "hsl(var(--background))",
-        foreground: "hsl(var(--foreground))",
-        primary: {
-          DEFAULT: "hsl(var(--primary))",
-          foreground: "hsl(var(--primary-foreground))",
-        },
-        secondary: {
-          DEFAULT: "hsl(var(--secondary))",
-          foreground: "hsl(var(--secondary-foreground))",
-        },
-        muted: {
-          DEFAULT: "hsl(var(--muted))",
-          foreground: "hsl(var(--muted-foreground))",
-        },
-        accent: {
-          DEFAULT: "hsl(var(--accent))",
-          foreground: "hsl(var(--accent-foreground))",
-        },
-        destructive: {
-          DEFAULT: "hsl(var(--destructive))",
-          foreground: "hsl(var(--destructive-foreground))",
-        },
-      },
-      borderRadius: {
-        lg: "var(--radius)",
-        md: "calc(var(--radius) - 2px)",
-        sm: "calc(var(--radius) - 4px)",
-      },
-    },
-  },
-  plugins: [],
-}
-`);
-
-  // Create global CSS with Tailwind and shadcn/ui CSS variables
-  vfs.writeFileSync('/app/globals.css', `@tailwind base;
-@tailwind components;
-@tailwind utilities;
-
-@layer base {
-  :root {
-    --background: 0 0% 100%;
-    --foreground: 222.2 84% 4.9%;
-    --card: 0 0% 100%;
-    --card-foreground: 222.2 84% 4.9%;
-    --popover: 0 0% 100%;
-    --popover-foreground: 222.2 84% 4.9%;
-    --primary: 222.2 47.4% 11.2%;
-    --primary-foreground: 210 40% 98%;
-    --secondary: 210 40% 96.1%;
-    --secondary-foreground: 222.2 47.4% 11.2%;
-    --muted: 210 40% 96.1%;
-    --muted-foreground: 215.4 16.3% 46.9%;
-    --accent: 210 40% 96.1%;
-    --accent-foreground: 222.2 47.4% 11.2%;
-    --destructive: 0 84.2% 60.2%;
-    --destructive-foreground: 210 40% 98%;
-    --border: 214.3 31.8% 91.4%;
-    --input: 214.3 31.8% 91.4%;
-    --ring: 222.2 84% 4.9%;
-    --radius: 0.5rem;
-  }
-
-  .dark {
-    --background: 222.2 84% 4.9%;
-    --foreground: 210 40% 98%;
-    --card: 222.2 84% 4.9%;
-    --card-foreground: 210 40% 98%;
-    --popover: 222.2 84% 4.9%;
-    --popover-foreground: 210 40% 98%;
-    --primary: 210 40% 98%;
-    --primary-foreground: 222.2 47.4% 11.2%;
-    --secondary: 217.2 32.6% 17.5%;
-    --secondary-foreground: 210 40% 98%;
-    --muted: 217.2 32.6% 17.5%;
-    --muted-foreground: 215 20.2% 65.1%;
-    --accent: 217.2 32.6% 17.5%;
-    --accent-foreground: 210 40% 98%;
-    --destructive: 0 62.8% 30.6%;
-    --destructive-foreground: 210 40% 98%;
-    --border: 217.2 32.6% 17.5%;
-    --input: 217.2 32.6% 17.5%;
-    --ring: 212.7 26.8% 83.9%;
-  }
+  // Create global CSS — minimal dark theme
+  vfs.writeFileSync('/app/globals.css', `*, *::before, *::after {
+  box-sizing: border-box;
 }
 
-@layer base {
-  * {
-    @apply border-border;
-  }
-  body {
-    @apply bg-background text-foreground;
-  }
+body {
+  background-color: hsl(222.2 84% 4.9%);
+  color: hsl(210 40% 98%);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  margin: 0;
+  line-height: 1.5;
 }
-`);
 
-  // Create utility lib (cn function from shadcn/ui)
-  vfs.writeFileSync('/lib/utils.ts', `// Utility functions
-// Note: In production, use clsx and tailwind-merge packages
-
-export function cn(...inputs: (string | undefined | null | false)[]) {
-  return inputs.filter(Boolean).join(' ');
+input[type="text"], input:not([type]) {
+  background-color: hsl(222.2 84% 4.9%);
+  color: hsl(210 40% 98%);
+  border: 1px solid hsl(217.2 32.6% 17.5%);
+  border-radius: 0.375rem;
+  padding: 0.5rem 0.75rem;
+  font-size: 0.875rem;
+  height: 2.5rem;
+  outline: none;
 }
+input:focus {
+  border-color: hsl(212.7 26.8% 83.9%);
+  box-shadow: 0 0 0 2px hsl(212.7 26.8% 83.9% / 0.2);
+}
+input::placeholder {
+  color: hsl(215 20.2% 65.1%);
+}
+
+input[type="checkbox"] {
+  width: 1rem;
+  height: 1rem;
+  accent-color: hsl(210 40% 98%);
+  cursor: pointer;
+}
+
+button {
+  background-color: hsl(210 40% 98%);
+  color: hsl(222.2 47.4% 11.2%);
+  border: none;
+  border-radius: 0.375rem;
+  padding: 0.5rem 1rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+  cursor: pointer;
+  height: 2.5rem;
+}
+button:hover {
+  opacity: 0.9;
+}
+
+ul { list-style: none; padding: 0; margin: 0; }
 `);
 
   // Create Convex config (required by CLI bundler)
@@ -233,6 +155,7 @@ export default app;
 `);
 
   // Create Convex schema
+  // priority is optional for backwards-compatibility with existing documents
   vfs.writeFileSync('/convex/schema.ts', `import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
 
@@ -240,7 +163,7 @@ export default defineSchema({
   todos: defineTable({
     title: v.string(),
     completed: v.boolean(),
-    priority: v.union(v.literal("low"), v.literal("medium"), v.literal("high")),
+    priority: v.optional(v.union(v.literal("low"), v.literal("medium"), v.literal("high"))),
   }),
 });
 `);
@@ -257,15 +180,11 @@ export const list = query({
 });
 
 export const create = mutation({
-  args: {
-    title: v.string(),
-    priority: v.union(v.literal("low"), v.literal("medium"), v.literal("high")),
-  },
+  args: { title: v.string() },
   handler: async (ctx, args) => {
     return await ctx.db.insert("todos", {
       title: args.title,
       completed: false,
-      priority: args.priority,
     });
   },
 });
@@ -401,25 +320,14 @@ export function ConvexProvider({ children }: { children: React.ReactNode }) {
   if (!convexClient) {
     // Show a message when Convex is not configured
     return (
-      <div className="min-h-screen bg-background font-sans antialiased">
-        <div className="flex flex-col items-center justify-center min-h-screen p-8 text-center">
-          <div className="max-w-md space-y-4">
-            <h2 className="text-2xl font-bold">Connect to Convex</h2>
-            <p className="text-muted-foreground">
-              Enter your Convex deploy key in the console panel and click "Deploy Schema" to connect.
-            </p>
-            <div className="p-4 bg-muted rounded-lg text-left text-sm">
-              <p className="font-medium mb-2">Files ready in /convex/:</p>
-              <ul className="space-y-1 text-muted-foreground">
-                <li>schema.ts - Database schema (todos table)</li>
-                <li>todos.ts - Query and mutation functions</li>
-              </ul>
-            </div>
-            <p className="text-xs text-muted-foreground">
-              Get a deploy key from your Convex dashboard at convex.dev
-            </p>
-          </div>
-        </div>
+      <div style={{ maxWidth: 480, margin: "0 auto", padding: "4rem 1rem", textAlign: "center" }}>
+        <h2 style={{ fontSize: "1.5rem", fontWeight: 700, marginBottom: "1rem" }}>Connect to Convex</h2>
+        <p style={{ color: "hsl(215 20.2% 65.1%)", marginBottom: "1.5rem" }}>
+          Enter your Convex deploy key in the console panel and click "Deploy Schema" to connect.
+        </p>
+        <p style={{ color: "hsl(215 20.2% 65.1%)", fontSize: "0.75rem" }}>
+          Get a deploy key from your Convex dashboard at convex.dev
+        </p>
       </div>
     );
   }
@@ -432,292 +340,19 @@ export function ConvexProvider({ children }: { children: React.ReactNode }) {
 }
 `);
 
-  // Create Button component (shadcn/ui style)
-  vfs.writeFileSync('/components/ui/button.tsx', `import React from 'react';
-import { cn } from '../../lib/utils.ts';
-
-const buttonVariants = {
-  default: "bg-primary text-primary-foreground hover:bg-primary/90",
-  destructive: "bg-destructive text-destructive-foreground hover:bg-destructive/90",
-  outline: "border border-input bg-background hover:bg-accent hover:text-accent-foreground",
-  secondary: "bg-secondary text-secondary-foreground hover:bg-secondary/80",
-  ghost: "hover:bg-accent hover:text-accent-foreground",
-  link: "text-primary underline-offset-4 hover:underline",
-};
-
-const buttonSizes = {
-  default: "h-10 px-4 py-2",
-  sm: "h-9 rounded-md px-3",
-  lg: "h-11 rounded-md px-8",
-  icon: "h-10 w-10",
-};
-
-export interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
-  variant?: keyof typeof buttonVariants;
-  size?: keyof typeof buttonSizes;
-}
-
-export function Button({
-  className,
-  variant = "default",
-  size = "default",
-  ...props
-}: ButtonProps) {
-  return (
-    <button
-      className={cn(
-        "inline-flex items-center justify-center whitespace-nowrap rounded-md text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50",
-        buttonVariants[variant],
-        buttonSizes[size],
-        className
-      )}
-      {...props}
-    />
-  );
-}
-`);
-
-  // Create Card component
-  vfs.writeFileSync('/components/ui/card.tsx', `import React from 'react';
-import { cn } from '../../lib/utils.ts';
-
-export function Card({
-  className,
-  ...props
-}: React.HTMLAttributes<HTMLDivElement>) {
-  return (
-    <div
-      className={cn(
-        "rounded-lg border bg-card text-card-foreground shadow-sm",
-        className
-      )}
-      {...props}
-    />
-  );
-}
-
-export function CardHeader({
-  className,
-  ...props
-}: React.HTMLAttributes<HTMLDivElement>) {
-  return (
-    <div
-      className={cn("flex flex-col space-y-1.5 p-6", className)}
-      {...props}
-    />
-  );
-}
-
-export function CardTitle({
-  className,
-  ...props
-}: React.HTMLAttributes<HTMLHeadingElement>) {
-  return (
-    <h3
-      className={cn("text-2xl font-semibold leading-none tracking-tight", className)}
-      {...props}
-    />
-  );
-}
-
-export function CardDescription({
-  className,
-  ...props
-}: React.HTMLAttributes<HTMLParagraphElement>) {
-  return (
-    <p
-      className={cn("text-sm text-muted-foreground", className)}
-      {...props}
-    />
-  );
-}
-
-export function CardContent({
-  className,
-  ...props
-}: React.HTMLAttributes<HTMLDivElement>) {
-  return <div className={cn("p-6 pt-0", className)} {...props} />;
-}
-
-export function CardFooter({
-  className,
-  ...props
-}: React.HTMLAttributes<HTMLDivElement>) {
-  return (
-    <div
-      className={cn("flex items-center p-6 pt-0", className)}
-      {...props}
-    />
-  );
-}
-`);
-
-  // Create Input component
-  vfs.writeFileSync('/components/ui/input.tsx', `import React from 'react';
-import { cn } from '../../lib/utils.ts';
-
-export interface InputProps extends React.InputHTMLAttributes<HTMLInputElement> {}
-
-export function Input({ className, type, ...props }: InputProps) {
-  return (
-    <input
-      type={type}
-      className={cn(
-        "flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50",
-        className
-      )}
-      {...props}
-    />
-  );
-}
-`);
-
-  // Create Badge component
-  vfs.writeFileSync('/components/ui/badge.tsx', `import React from 'react';
-import { cn } from '../../lib/utils.ts';
-
-const badgeVariants = {
-  default: "border-transparent bg-primary text-primary-foreground hover:bg-primary/80",
-  secondary: "border-transparent bg-secondary text-secondary-foreground hover:bg-secondary/80",
-  destructive: "border-transparent bg-destructive text-destructive-foreground hover:bg-destructive/80",
-  outline: "text-foreground",
-  success: "border-transparent bg-green-500 text-white",
-  warning: "border-transparent bg-yellow-500 text-white",
-};
-
-export interface BadgeProps extends React.HTMLAttributes<HTMLDivElement> {
-  variant?: keyof typeof badgeVariants;
-}
-
-export function Badge({ className, variant = "default", ...props }: BadgeProps) {
-  return (
-    <div
-      className={cn(
-        "inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2",
-        badgeVariants[variant],
-        className
-      )}
-      {...props}
-    />
-  );
-}
-`);
-
-  // Create Checkbox component
-  vfs.writeFileSync('/components/ui/checkbox.tsx', `import React from 'react';
-import { cn } from '../../lib/utils.ts';
-
-export interface CheckboxProps extends React.InputHTMLAttributes<HTMLInputElement> {
-  onCheckedChange?: (checked: boolean) => void;
-}
-
-export function Checkbox({ className, checked, onCheckedChange, ...props }: CheckboxProps) {
-  return (
-    <input
-      type="checkbox"
-      checked={checked}
-      onChange={(e) => onCheckedChange?.(e.target.checked)}
-      className={cn(
-        "h-4 w-4 shrink-0 rounded-sm border border-primary ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 data-[state=checked]:bg-primary data-[state=checked]:text-primary-foreground",
-        className
-      )}
-      {...props}
-    />
-  );
-}
-`);
-
-  // Create Select component (simplified)
-  vfs.writeFileSync('/components/ui/select.tsx', `import React from 'react';
-import { cn } from '../../lib/utils.ts';
-
-export interface SelectProps extends React.SelectHTMLAttributes<HTMLSelectElement> {}
-
-export function Select({ className, children, ...props }: SelectProps) {
-  return (
-    <select
-      className={cn(
-        "flex h-10 w-full items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50",
-        className
-      )}
-      {...props}
-    >
-      {children}
-    </select>
-  );
-}
-`);
 
   // Create TaskList component (uses real Convex API)
   vfs.writeFileSync('/components/task-list.tsx', `"use client";
 
 import React from 'react';
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from './ui/card.tsx';
-import { Button } from './ui/button.tsx';
-import { Input } from './ui/input.tsx';
-import { Badge } from './ui/badge.tsx';
-import { Checkbox } from './ui/checkbox.tsx';
-import { Select } from './ui/select.tsx';
 import { useQuery, useMutation, api } from '../lib/convex.tsx';
-import { cn } from '../lib/utils.ts';
 
 type Todo = {
   _id: string;
   _creationTime: number;
   title: string;
   completed: boolean;
-  priority: "low" | "medium" | "high";
 };
-
-const priorityColors = {
-  low: "success" as const,
-  medium: "warning" as const,
-  high: "destructive" as const,
-};
-
-function TaskItem({
-  task,
-  onToggle,
-  onDelete
-}: {
-  task: Todo;
-  onToggle: () => void;
-  onDelete: () => void;
-}) {
-  return (
-    <div className={cn(
-      "flex items-center gap-4 p-4 border rounded-lg transition-all",
-      task.completed && "opacity-50 bg-muted"
-    )}>
-      <Checkbox
-        checked={task.completed}
-        onCheckedChange={onToggle}
-      />
-      <div className="flex-1 min-w-0">
-        <p className={cn(
-          "font-medium truncate",
-          task.completed && "line-through text-muted-foreground"
-        )}>
-          {task.title}
-        </p>
-        <p className="text-xs text-muted-foreground">
-          Created {new Date(task._creationTime).toLocaleDateString()}
-        </p>
-      </div>
-      <Badge variant={priorityColors[task.priority]}>
-        {task.priority}
-      </Badge>
-      <Button
-        variant="ghost"
-        size="sm"
-        onClick={onDelete}
-        className="text-destructive hover:text-destructive"
-      >
-        Delete
-      </Button>
-    </div>
-  );
-}
 
 export function TaskList() {
   const todos = useQuery(api.todos.list) as Todo[] | undefined;
@@ -726,74 +361,72 @@ export function TaskList() {
   const removeTodo = useMutation(api.todos.remove);
 
   const [newTitle, setNewTitle] = React.useState("");
-  const [priority, setPriority] = React.useState<Todo["priority"]>("medium");
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newTitle.trim()) return;
-
-    await createTodo({ title: newTitle.trim(), priority });
+    await createTodo({ title: newTitle.trim() });
     setNewTitle("");
   };
 
-  const completedCount = todos?.filter(t => t.completed).length ?? 0;
-  const totalCount = todos?.length ?? 0;
-
   return (
-    <Card className="w-full max-w-2xl mx-auto">
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2">
-          Task Manager
-          <Badge variant="secondary">
-            {completedCount}/{totalCount} done
-          </Badge>
-        </CardTitle>
-        <CardDescription>
-          Real-time sync powered by Convex - running from the browser!
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        <form onSubmit={handleSubmit} className="flex gap-2">
-          <Input
-            placeholder="Add a new task..."
-            value={newTitle}
-            onChange={(e) => setNewTitle(e.target.value)}
-            className="flex-1"
-          />
-          <Select
-            value={priority}
-            onChange={(e) => setPriority(e.target.value as Todo["priority"])}
-            className="w-32"
-          >
-            <option value="low">Low</option>
-            <option value="medium">Medium</option>
-            <option value="high">High</option>
-          </Select>
-          <Button type="submit">Add Task</Button>
-        </form>
+    <div style={{ maxWidth: 480, margin: "0 auto", padding: "2rem 1rem" }}>
+      <h1 style={{ fontSize: "1.5rem", fontWeight: 700, marginBottom: "1.5rem" }}>
+        Todos
+      </h1>
 
-        <div className="space-y-2">
-          {todos === undefined ? (
-            <div className="text-center py-8 text-muted-foreground">
-              Loading tasks...
-            </div>
-          ) : todos.length === 0 ? (
-            <div className="text-center py-8 text-muted-foreground">
-              No tasks yet. Add one above!
-            </div>
-          ) : (
-            todos.map((task) => (
-              <TaskItem
-                key={task._id}
-                task={task}
-                onToggle={() => toggleTodo({ id: task._id })}
-                onDelete={() => removeTodo({ id: task._id })}
+      <form onSubmit={handleSubmit} style={{ display: "flex", gap: "0.5rem", marginBottom: "1.5rem" }}>
+        <input
+          placeholder="What needs to be done?"
+          value={newTitle}
+          onChange={(e) => setNewTitle(e.target.value)}
+          style={{ flex: 1 }}
+        />
+        <button type="submit">Add</button>
+      </form>
+
+      {todos === undefined ? (
+        <p style={{ color: "hsl(215 20.2% 65.1%)" }}>Loading...</p>
+      ) : todos.length === 0 ? (
+        <p style={{ color: "hsl(215 20.2% 65.1%)" }}>No todos yet.</p>
+      ) : (
+        <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
+          {todos.map((todo) => (
+            <li key={todo._id} style={{
+              display: "flex",
+              alignItems: "center",
+              gap: "0.75rem",
+              padding: "0.625rem 0",
+              borderBottom: "1px solid hsl(217.2 32.6% 17.5%)",
+            }}>
+              <input
+                type="checkbox"
+                checked={todo.completed}
+                onChange={() => toggleTodo({ id: todo._id })}
               />
-            ))
-          )}
-        </div>
-      </CardContent>
-    </Card>
+              <span style={{
+                flex: 1,
+                textDecoration: todo.completed ? "line-through" : "none",
+                opacity: todo.completed ? 0.5 : 1,
+              }}>
+                {todo.title}
+              </span>
+              <button
+                onClick={() => removeTodo({ id: todo._id })}
+                style={{
+                  background: "transparent",
+                  color: "hsl(0 62.8% 50%)",
+                  padding: "0.25rem 0.5rem",
+                  fontSize: "0.75rem",
+                }}
+              >
+                Delete
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
   );
 }
 `);
@@ -806,8 +439,8 @@ import './globals.css';
 import { ConvexProvider } from '../lib/convex.tsx';
 
 export const metadata = {
-  title: 'Convex App Demo',
-  description: 'A realistic Next.js + Convex app running in the browser',
+  title: 'Convex Todo App',
+  description: 'A simple todo app powered by Convex, running in the browser',
 };
 
 export default function RootLayout({
@@ -817,40 +450,7 @@ export default function RootLayout({
 }) {
   return (
     <ConvexProvider>
-      <div className="min-h-screen bg-background font-sans antialiased">
-        <div className="relative flex min-h-screen flex-col">
-          <header className="sticky top-0 z-50 w-full border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
-            <div className="container flex h-14 items-center">
-              <div className="mr-4 flex">
-                <a href="/" className="mr-6 flex items-center space-x-2">
-                  <span className="font-bold text-xl">TaskApp</span>
-                </a>
-                <nav className="flex items-center space-x-6 text-sm font-medium">
-                  <a href="/" className="transition-colors hover:text-foreground/80 text-foreground">
-                    Home
-                  </a>
-                  <a href="/tasks" className="transition-colors hover:text-foreground/80 text-muted-foreground">
-                    Tasks
-                  </a>
-                  <a href="/about" className="transition-colors hover:text-foreground/80 text-muted-foreground">
-                    About
-                  </a>
-                </nav>
-              </div>
-            </div>
-          </header>
-          <main className="flex-1">
-            {children}
-          </main>
-          <footer className="border-t py-6 md:py-0">
-            <div className="container flex flex-col items-center justify-between gap-4 md:h-14 md:flex-row">
-              <p className="text-center text-sm leading-loose text-muted-foreground">
-                Running in browser with virtual Node.js
-              </p>
-            </div>
-          </footer>
-        </div>
-      </div>
+      {children}
     </ConvexProvider>
   );
 }
@@ -863,261 +463,10 @@ import React from 'react';
 import { TaskList } from '../components/task-list.tsx';
 
 export default function HomePage() {
-  return (
-    <div className="container py-10">
-      <div className="mb-8 text-center">
-        <h1 className="text-3xl font-bold tracking-tight">Task Manager</h1>
-        <p className="text-muted-foreground mt-2">
-          Real-time sync powered by Convex - running in the browser!
-        </p>
-      </div>
-      <TaskList />
-    </div>
-  );
+  return <TaskList />;
 }
 `);
 
-  // Create original home page content as a separate page (for reference)
-  vfs.writeFileSync('/app/features/page.tsx', `import React from 'react';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../../components/ui/card.tsx';
-import { Button } from '../../components/ui/button.tsx';
-import { Badge } from '../../components/ui/badge.tsx';
-
-export default function FeaturesPage() {
-  return (
-    <div className="container py-10">
-      {/* Feature Cards */}
-      <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              ⚡ React 18
-            </CardTitle>
-            <CardDescription>
-              Latest React with Concurrent features
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <p className="text-sm text-muted-foreground">
-              Using React 18 with automatic batching, Suspense,
-              and concurrent rendering for optimal performance.
-            </p>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              🎨 shadcn/ui
-            </CardTitle>
-            <CardDescription>
-              Beautiful, accessible components
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <p className="text-sm text-muted-foreground">
-              Beautifully designed components built with Radix UI
-              primitives and Tailwind CSS.
-            </p>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              🔄 Convex (Mock)
-            </CardTitle>
-            <CardDescription>
-              Real-time data sync simulation
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <p className="text-sm text-muted-foreground">
-              Demonstrates the Convex pattern with useQuery and
-              useMutation hooks using mock data.
-            </p>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              🎯 TypeScript
-            </CardTitle>
-            <CardDescription>
-              Full type safety
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <p className="text-sm text-muted-foreground">
-              Written in TypeScript with strict mode enabled
-              for maximum type safety and developer experience.
-            </p>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              📱 Responsive
-            </CardTitle>
-            <CardDescription>
-              Mobile-first design
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <p className="text-sm text-muted-foreground">
-              Fully responsive design that works great on any device,
-              from mobile phones to desktop monitors.
-            </p>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              🌐 Browser Runtime
-            </CardTitle>
-            <CardDescription>
-              No server required
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <p className="text-sm text-muted-foreground">
-              Running entirely in the browser using virtual Node.js
-              shims and Service Workers.
-            </p>
-          </CardContent>
-        </Card>
-      </div>
-    </div>
-  );
-}
-`);
-
-  // Create features directory
-  vfs.mkdirSync('/app/features', { recursive: true });
-
-  // Create tasks page (App Router)
-  vfs.writeFileSync('/app/tasks/page.tsx', `"use client";
-
-import React from 'react';
-import { TaskList } from '../../components/task-list.tsx';
-
-export default function TasksPage() {
-  return (
-    <div className="container py-10">
-      <div className="mb-8 text-center">
-        <h1 className="text-3xl font-bold tracking-tight">Task Manager</h1>
-        <p className="text-muted-foreground mt-2">
-          Add, complete, and manage your tasks
-        </p>
-      </div>
-      <TaskList />
-    </div>
-  );
-}
-`);
-
-  // Create about page (App Router)
-  vfs.writeFileSync('/app/about/page.tsx', `import React from 'react';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../../components/ui/card.tsx';
-import { Badge } from '../../components/ui/badge.tsx';
-
-export default function AboutPage() {
-  return (
-    <div className="container py-10 max-w-3xl">
-      <div className="mb-8">
-        <Badge variant="outline" className="mb-4">About</Badge>
-        <h1 className="text-3xl font-bold tracking-tight">How It Works</h1>
-        <p className="text-muted-foreground mt-2">
-          This demo showcases running a complex Next.js application entirely in the browser.
-        </p>
-      </div>
-
-      <div className="space-y-6">
-        <Card>
-          <CardHeader>
-            <CardTitle>Virtual File System</CardTitle>
-            <CardDescription>In-memory file system simulation</CardDescription>
-          </CardHeader>
-          <CardContent className="prose prose-sm">
-            <p>
-              All project files exist in a virtual file system (VFS) in memory.
-              This includes React components, configuration files, and even
-              npm package contents.
-            </p>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle>Node.js Shims</CardTitle>
-            <CardDescription>Browser-compatible Node.js APIs</CardDescription>
-          </CardHeader>
-          <CardContent className="prose prose-sm">
-            <p>
-              Core Node.js modules like <code>fs</code>, <code>path</code>, <code>crypto</code>,
-              <code>stream</code>, and <code>http</code> are shimmed to work in the browser
-              using Web APIs.
-            </p>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle>esbuild-wasm</CardTitle>
-            <CardDescription>Fast JSX/TypeScript compilation</CardDescription>
-          </CardHeader>
-          <CardContent className="prose prose-sm">
-            <p>
-              JSX and TypeScript files are transformed to JavaScript in real-time
-              using esbuild-wasm, which runs WebAssembly in the browser.
-            </p>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle>Service Worker</CardTitle>
-            <CardDescription>Request interception and routing</CardDescription>
-          </CardHeader>
-          <CardContent className="prose prose-sm">
-            <p>
-              A Service Worker intercepts HTTP requests and routes them to the
-              virtual dev server, enabling file-based routing without a real backend.
-            </p>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle>Convex Mock</CardTitle>
-            <CardDescription>Simulated real-time database</CardDescription>
-          </CardHeader>
-          <CardContent className="prose prose-sm">
-            <p>
-              The Convex client is mocked to demonstrate the pattern of using
-              <code>useQuery</code> and <code>useMutation</code> hooks. In production,
-              this would connect to a real Convex backend.
-            </p>
-          </CardContent>
-        </Card>
-      </div>
-    </div>
-  );
-}
-`);
-
-  // Create API route
-  vfs.writeFileSync('/pages/api/health.js', `export default function handler(req, res) {
-  res.status(200).json({
-    status: 'ok',
-    timestamp: new Date().toISOString(),
-    runtime: 'browser-node-shim'
-  });
-}
-`);
 
   // Create public files
   vfs.writeFileSync('/public/favicon.ico', 'favicon placeholder');

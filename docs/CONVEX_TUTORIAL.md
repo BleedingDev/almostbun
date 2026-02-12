@@ -1,6 +1,6 @@
-# Just Node + Convex Tutorial
+# almostnode — Convex Tutorial
 
-Build and deploy real-time Convex applications entirely in the browser using Just Node's virtual Node.js runtime.
+Build and deploy real-time Convex applications entirely in the browser using almostnode's virtual Node.js runtime.
 
 ## Table of Contents
 
@@ -15,7 +15,7 @@ Build and deploy real-time Convex applications entirely in the browser using Jus
 
 ## Introduction
 
-**Just Node** provides a complete Node.js-compatible runtime that runs in your browser. You can:
+**almostnode** provides a complete Node.js-compatible runtime that runs in your browser. You can:
 
 - Create a virtual filesystem with project files
 - Install npm packages (including Convex)
@@ -52,7 +52,7 @@ vfs.writeFileSync('/package.json', JSON.stringify({ name: 'my-app' }));
 vfs.mkdirSync('/app', { recursive: true });
 vfs.writeFileSync('/app/page.tsx', `
   export default function Home() {
-    return <h1>Hello from Just Node!</h1>;
+    return <h1>Hello from almostnode!</h1>;
   }
 `);
 
@@ -577,5 +577,5 @@ Some CLI errors are expected (like `process.exit` calls). The deployment happens
 
 - [Convex Documentation](https://docs.convex.dev)
 - [Convex Dashboard](https://dashboard.convex.dev)
-- [Just Node API Documentation](./API.md)
+- [almostnode API Documentation](../README.md#api-reference)
 - [CLI Integration Details](./CONVEX_CLI_INTEGRATION.md)
