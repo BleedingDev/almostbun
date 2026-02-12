@@ -11,6 +11,7 @@ import {
   writeBootstrapProjectSnapshotCache,
 } from './project-snapshot-cache';
 import type { ProjectSnapshotCacheMode } from './project-snapshot-cache';
+import { runRepoPreflight } from './preflight';
 
 export interface BootstrapGitHubProjectOptions
   extends ImportGitHubRepoOptions,
@@ -96,15 +97,38 @@ export async function bootstrapGitHubProject(
     if (!vfs.existsSync(packageJsonPath)) {
       finalResult = importResult;
     } else {
+      const preInstallPreflight = runRepoPreflight(vfs, importResult.projectPath, {
+        autoFix: true,
+        includeWorkspaces: options.includeWorkspaces,
+        preferPublishedWorkspacePackages: options.preferPublishedWorkspacePackages,
+        onProgress: options.onProgress,
+      });
+      for (const issue of preInstallPreflight.issues) {
+        options.onProgress?.(
+          `[preflight:${issue.severity}] ${issue.message}${issue.path ? ` (${issue.path})` : ''}`
+        );
+      }
+
       const manager = new PackageManager(vfs, { cwd: importResult.projectPath });
       const installResult = await manager.installFromPackageJson({
         includeDev: options.includeDev,
         includeOptional: options.includeOptional,
-        includeWorkspaces: options.includeWorkspaces,
-        preferPublishedWorkspacePackages: options.preferPublishedWorkspacePackages,
+        includeWorkspaces: options.includeWorkspaces ?? preInstallPreflight.installOverrides.includeWorkspaces,
+        preferPublishedWorkspacePackages:
+          options.preferPublishedWorkspacePackages ??
+          preInstallPreflight.installOverrides.preferPublishedWorkspacePackages,
         onProgress: options.onProgress,
         transform: options.transform,
       });
+
+      const postInstallPreflight = runRepoPreflight(vfs, importResult.projectPath, {
+        autoFix: false,
+      });
+      for (const issue of postInstallPreflight.issues) {
+        options.onProgress?.(
+          `[preflight:${issue.severity}] ${issue.message}${issue.path ? ` (${issue.path})` : ''}`
+        );
+      }
 
       let transformedProjectFiles = 0;
       const shouldTransformProjectSources =

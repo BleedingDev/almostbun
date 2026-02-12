@@ -7,7 +7,7 @@
  * All cache operations are best-effort and must never break runtime flows.
  */
 
-import { simpleHash } from '../utils/hash';
+import { hashBytes, simpleHash } from '../utils/hash';
 
 interface PersistentCacheEntry {
   key: string;
@@ -26,6 +26,15 @@ export interface PersistentBinaryCacheOptions {
   key: string;
   maxEntries: number;
   maxBytes: number;
+  /**
+   * Store payload by content hash-backed ID so equivalent payloads dedupe.
+   * Default: false
+   */
+  contentAddressed?: boolean;
+  /**
+   * Optional precomputed payload hash for content-addressed writes.
+   */
+  contentHash?: string;
 }
 
 const OPFS_ROOT_DIR = 'almostbun-cache-v1';
@@ -114,6 +123,24 @@ function namespaceId(namespace: string): string {
 
 function entryIdForKey(key: string): string {
   return safeKeyFragment(`${key}|${key.length}`);
+}
+
+function entryIdForContentHash(contentHash: string): string {
+  return safeKeyFragment(`content:${contentHash}`);
+}
+
+function resolveEntryId(
+  options: PersistentBinaryCacheOptions,
+  payload: Uint8Array
+): string {
+  const explicitHash = options.contentHash?.trim();
+  if (explicitHash) {
+    return entryIdForContentHash(explicitHash);
+  }
+  if (options.contentAddressed) {
+    return entryIdForContentHash(hashBytes(payload));
+  }
+  return entryIdForKey(options.key);
 }
 
 function dataFileName(id: string): string {
@@ -494,9 +521,10 @@ function writeToLocalStorage(options: PersistentBinaryCacheOptions, bytes: Uint8
     return null;
   }
 
-  const id = entryIdForKey(options.key);
+  const id = resolveEntryId(options, bytes);
   const payload = bytesToBase64(bytes);
   const index = readLocalIndex(storage, options.namespace);
+  const previous = index.entries.find((entry) => entry.key === options.key);
   if (!storeLocalPayload(storage, localEntryKey(options.namespace, id), payload, options.namespace, index)) {
     return null;
   }
@@ -511,10 +539,20 @@ function writeToLocalStorage(options: PersistentBinaryCacheOptions, bytes: Uint8
   index.entries = index.entries.filter((entry) => entry.key !== options.key);
   index.entries.push(nextEntry);
 
+  if (
+    previous &&
+    previous.id !== id &&
+    !index.entries.some((entry) => entry.id === previous.id)
+  ) {
+    removeLocalEntry(storage, options.namespace, previous);
+  }
+
   const { kept, evicted } = enforceLimits(index.entries, options.maxEntries, options.maxBytes);
   index.entries = kept;
   for (const evictedEntry of evicted) {
-    removeLocalEntry(storage, options.namespace, evictedEntry);
+    if (!index.entries.some((entry) => entry.id === evictedEntry.id)) {
+      removeLocalEntry(storage, options.namespace, evictedEntry);
+    }
   }
 
   try {
@@ -630,7 +668,7 @@ async function writeToOpfs(options: PersistentBinaryCacheOptions, bytes: Uint8Ar
   }
 
   const index = await readOpfsIndex(directory);
-  const id = entryIdForKey(options.key);
+  const id = resolveEntryId(options, bytes);
 
   try {
     const handle = await directory.getFileHandle(dataFileName(id), { create: true });
@@ -657,14 +695,18 @@ async function writeToOpfs(options: PersistentBinaryCacheOptions, bytes: Uint8Ar
   index.entries.push(nextEntry);
 
   if (previous && previous.id !== id) {
-    await removeOpfsEntry(directory, previous);
+    if (!index.entries.some((entry) => entry.id === previous.id)) {
+      await removeOpfsEntry(directory, previous);
+    }
   }
 
   const { kept, evicted } = enforceLimits(index.entries, options.maxEntries, options.maxBytes);
   index.entries = kept;
 
   for (const evictedEntry of evicted) {
-    await removeOpfsEntry(directory, evictedEntry);
+    if (!index.entries.some((entry) => entry.id === evictedEntry.id)) {
+      await removeOpfsEntry(directory, evictedEntry);
+    }
   }
 
   try {
@@ -724,8 +766,10 @@ function removeLocalEntryByKeyAndId(
     return;
   }
 
-  removeLocalEntry(storage, namespace, target);
   index.entries = index.entries.filter((entry) => entry.key !== target.key);
+  if (!index.entries.some((entry) => entry.id === target.id)) {
+    removeLocalEntry(storage, namespace, target);
+  }
   try {
     writeLocalIndex(storage, namespace, index);
   } catch {
@@ -749,8 +793,10 @@ async function removeOpfsEntryByKeyAndId(
     return;
   }
 
-  await removeOpfsEntry(directory, target);
   index.entries = index.entries.filter((entry) => entry.key !== target.key);
+  if (!index.entries.some((entry) => entry.id === target.id)) {
+    await removeOpfsEntry(directory, target);
+  }
   try {
     await writeOpfsIndex(directory, index);
   } catch {

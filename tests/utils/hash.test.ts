@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { simpleHash } from '../../src/utils/hash';
+import { hashBytes, simpleHash } from '../../src/utils/hash';
 
 describe('simpleHash', () => {
   it('should return a string', () => {
@@ -53,5 +53,23 @@ describe('simpleHash', () => {
     const result = simpleHash('test');
     // Base36 only contains 0-9 and a-z (or negative sign)
     expect(result).toMatch(/^-?[0-9a-z]+$/);
+  });
+});
+
+describe('hashBytes', () => {
+  it('returns deterministic hash for byte arrays', () => {
+    const bytes = new Uint8Array([1, 2, 3, 4, 5]);
+    expect(hashBytes(bytes)).toBe(hashBytes(bytes));
+  });
+
+  it('distinguishes different byte arrays', () => {
+    const a = new Uint8Array([1, 2, 3]);
+    const b = new Uint8Array([1, 2, 4]);
+    expect(hashBytes(a)).not.toBe(hashBytes(b));
+  });
+
+  it('accepts ArrayBuffer inputs', () => {
+    const bytes = new Uint8Array([9, 8, 7]);
+    expect(hashBytes(bytes.buffer)).toBe(hashBytes(bytes));
   });
 });

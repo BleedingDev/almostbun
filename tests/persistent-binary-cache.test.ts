@@ -119,6 +119,51 @@ describe('persistent binary cache', () => {
     }
   });
 
+  it('deduplicates content-addressed payloads and keeps shared payload after key eviction', async () => {
+    const storage = createStorageMock();
+    const restore = installBrowserEnvironment({
+      localStorage: storage,
+      navigatorStorage: undefined,
+    });
+
+    const options = {
+      namespace: 'content-addressed-local',
+      maxEntries: 2,
+      maxBytes: 1024 * 1024,
+      contentAddressed: true,
+    };
+
+    try {
+      await writePersistentBinaryCache(
+        { ...options, key: 'a' },
+        encodeText('same-payload')
+      );
+      await writePersistentBinaryCache(
+        { ...options, key: 'b' },
+        encodeText('same-payload')
+      );
+
+      const beforeKeys = storage.__keys().filter((key) => key.includes('__almostbun_cache_entry_v1__'));
+      expect(beforeKeys.length).toBe(1);
+
+      // This write triggers key-level eviction (maxEntries=2), but shared payload for "b" must survive.
+      await writePersistentBinaryCache(
+        { ...options, key: 'c' },
+        encodeText('another-payload')
+      );
+
+      const b = await readPersistentBinaryCache({
+        ...options,
+        key: 'b',
+      });
+      expect(b).not.toBeNull();
+      expect(decodeText(b!)).toBe('same-payload');
+    } finally {
+      await clearPersistentBinaryCacheForTests();
+      restore();
+    }
+  });
+
   it('enforces global cache quota across namespaces', async () => {
     const restore = installBrowserEnvironment({
       localStorage: createStorageMock(),
@@ -209,6 +254,9 @@ function createStorageMock() {
     },
     removeItem(key: string): void {
       storage.delete(key);
+    },
+    __keys(): string[] {
+      return [...storage.keys()];
     },
   };
 }

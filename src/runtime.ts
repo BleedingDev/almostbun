@@ -264,6 +264,22 @@ export interface RuntimeOptions {
   env?: Record<string, string>;
   argv?: string[];
   onConsole?: (method: string, args: unknown[]) => void;
+  onTrace?: (event: RuntimeTraceEvent) => void;
+}
+
+export interface RuntimeTraceEvent {
+  type:
+    | 'resolve-cache-hit'
+    | 'resolve-cache-miss'
+    | 'resolve-success'
+    | 'resolve-failure'
+    | 'load-module-cache-hit'
+    | 'load-module-start'
+    | 'load-module-success';
+  id?: string;
+  fromDir?: string;
+  resolvedPath?: string;
+  reason?: string;
 }
 
 export interface RequireFunction {
@@ -446,6 +462,13 @@ function createRequire(
     paths: Array<{ pattern: string; targets: string[] }>;
   } | null> = new Map();
   let legacyEventsModuleCache: unknown = null;
+  const emitTrace = (event: RuntimeTraceEvent): void => {
+    try {
+      options.onTrace?.(event);
+    } catch {
+      // Trace hooks must never break module loading.
+    }
+  };
 
   const copyDescriptors = (from: Record<string, unknown>, to: Record<string, unknown>): void => {
     for (const prop of Object.getOwnPropertyNames(from)) {
@@ -768,10 +791,27 @@ function createRequire(
     const cached = resolutionCache.get(cacheKey);
     if (cached !== undefined) {
       if (cached === null) {
+        emitTrace({
+          type: 'resolve-cache-hit',
+          id,
+          fromDir,
+          reason: 'negative',
+        });
         throw new Error(`Cannot find module '${id}'`);
       }
+      emitTrace({
+        type: 'resolve-cache-hit',
+        id,
+        fromDir,
+        resolvedPath: cached,
+      });
       return cached;
     }
+    emitTrace({
+      type: 'resolve-cache-miss',
+      id,
+      fromDir,
+    });
 
     // Relative paths
     if (id === '.' || id === '..' || id.startsWith('./') || id.startsWith('../') || id.startsWith('/')) {
@@ -782,10 +822,23 @@ function createRequire(
       const resolvedFile = tryResolveFile(resolved);
       if (resolvedFile) {
         resolutionCache.set(cacheKey, resolvedFile);
+        emitTrace({
+          type: 'resolve-success',
+          id,
+          fromDir,
+          resolvedPath: resolvedFile,
+          reason: 'relative',
+        });
         return resolvedFile;
       }
 
       resolutionCache.set(cacheKey, null);
+      emitTrace({
+        type: 'resolve-failure',
+        id,
+        fromDir,
+        reason: 'relative-not-found',
+      });
       throw new Error(`Cannot find module '${id}' from '${fromDir}'`);
     }
 
@@ -793,6 +846,13 @@ function createRequire(
     const aliasResolved = resolveTsConfigAlias(id, fromDir);
     if (aliasResolved) {
       resolutionCache.set(cacheKey, aliasResolved);
+      emitTrace({
+        type: 'resolve-success',
+        id,
+        fromDir,
+        resolvedPath: aliasResolved,
+        reason: 'tsconfig-alias',
+      });
       return aliasResolved;
     }
 
@@ -846,7 +906,16 @@ function createRequire(
         : [moduleId, subPath];
 
       const conditionCandidates: Array<Record<string, boolean>> = [
+        { require: true, default: true },
         { require: true },
+        { import: true, default: true },
+        { import: true },
+        { default: true },
+        // Browser conditions remain a late fallback for packages that only expose browser keys.
+        { browser: true, require: true, default: true },
+        { browser: true, import: true, default: true },
+        { browser: true, default: true },
+        { browser: true },
         {},
       ];
 
@@ -876,6 +945,7 @@ function createRequire(
     };
 
     const pnpmRootsCache = new Map<string, string[]>();
+    const workspacePackageMapCache = new Map<string, Map<string, string>>();
 
     const getPnpmPackageRoots = (nodeModulesDir: string, pkgName: string): string[] => {
       const cacheKey = `${nodeModulesDir}|${pkgName}`;
@@ -910,6 +980,116 @@ function createRequire(
 
       pnpmRootsCache.set(cacheKey, roots);
       return roots;
+    };
+
+    const toWorkspacePatterns = (workspaces: PackageJson['workspaces']): string[] => {
+      if (Array.isArray(workspaces)) {
+        return workspaces.filter((item): item is string => typeof item === 'string' && item.length > 0);
+      }
+      if (workspaces && typeof workspaces === 'object') {
+        const nested = (workspaces as { packages?: unknown }).packages;
+        if (Array.isArray(nested)) {
+          return nested.filter((item): item is string => typeof item === 'string' && item.length > 0);
+        }
+      }
+      return [];
+    };
+
+    const globToRegExp = (pattern: string): RegExp => {
+      const normalizedPattern = pattern
+        .replace(/\\/g, '/')
+        .replace(/^\.\//, '')
+        .replace(/^\/+/, '')
+        .replace(/\/+$/, '');
+      const escaped = normalizedPattern
+        .replace(/[.+^${}()|[\]\\]/g, '\\$&')
+        .replace(/\*\*/g, '\u0000')
+        .replace(/\*/g, '[^/]*')
+        .replace(/\u0000/g, '.*');
+      return new RegExp(`^${escaped}$`);
+    };
+
+    const discoverWorkspacePackageMap = (workspaceRoot: string, patterns: string[]): Map<string, string> => {
+      const cacheKey = `${workspaceRoot}|${patterns.join(',')}`;
+      const cached = workspacePackageMapCache.get(cacheKey);
+      if (cached) {
+        return cached;
+      }
+
+      const map = new Map<string, string>();
+      if (patterns.length === 0) {
+        workspacePackageMapCache.set(cacheKey, map);
+        return map;
+      }
+
+      const patternMatchers = patterns.map(globToRegExp);
+      const queue: Array<{ dir: string; depth: number }> = [{ dir: workspaceRoot, depth: 0 }];
+      const visited = new Set<string>();
+      const maxDepth = 6;
+
+      while (queue.length > 0) {
+        const current = queue.shift()!;
+        if (visited.has(current.dir)) continue;
+        visited.add(current.dir);
+
+        const relativeDir = pathShim.relative(workspaceRoot, current.dir);
+        if (relativeDir && relativeDir !== '.') {
+          const normalizedRelative = relativeDir.replace(/\\/g, '/');
+          if (patternMatchers.some((matcher) => matcher.test(normalizedRelative))) {
+            const pkgPath = pathShim.join(current.dir, 'package.json');
+            const pkg = getParsedPackageJson(pkgPath);
+            if (pkg?.name && typeof pkg.name === 'string' && pkg.name.length > 0) {
+              map.set(pkg.name, current.dir);
+            }
+          }
+        }
+
+        if (current.depth >= maxDepth) {
+          continue;
+        }
+
+        let entries: string[] = [];
+        try {
+          entries = vfs.readdirSync(current.dir);
+        } catch {
+          continue;
+        }
+
+        for (const entry of entries) {
+          if (entry === 'node_modules' || entry === '.git') {
+            continue;
+          }
+          const fullPath = pathShim.join(current.dir, entry);
+          try {
+            if (vfs.statSync(fullPath).isDirectory()) {
+              queue.push({ dir: fullPath, depth: current.depth + 1 });
+            }
+          } catch {
+            // ignore invalid entry
+          }
+        }
+      }
+
+      workspacePackageMapCache.set(cacheKey, map);
+      return map;
+    };
+
+    const getWorkspacePackageMapForDir = (startDir: string): Map<string, string> => {
+      let current = startDir;
+      while (true) {
+        const pkgPath = pathShim.join(current, 'package.json');
+        const pkg = getParsedPackageJson(pkgPath);
+        const patterns = toWorkspacePatterns(pkg?.workspaces);
+        if (pkg && patterns.length > 0) {
+          return discoverWorkspacePackageMap(current, patterns);
+        }
+        const parentDir = pathShim.dirname(current);
+        if (parentDir === current) {
+          break;
+        }
+        current = parentDir;
+      }
+      return new Map();
     };
 
     // Helper to resolve from a node_modules directory
@@ -968,6 +1148,54 @@ function createRequire(
       return null;
     };
 
+    const tryResolveFromWorkspacePackages = (moduleId: string, fromDirectory: string): string | null => {
+      const parts = moduleId.split('/');
+      const pkgName = parts[0].startsWith('@') && parts.length > 1
+        ? `${parts[0]}/${parts[1]}`
+        : parts[0];
+      if (!pkgName) {
+        return null;
+      }
+
+      const workspaceMap = getWorkspacePackageMapForDir(fromDirectory);
+      const pkgRoot = workspaceMap.get(pkgName);
+      if (!pkgRoot) {
+        return null;
+      }
+
+      const pkg = getParsedPackageJson(pathShim.join(pkgRoot, 'package.json'));
+      if (pkg) {
+        const exportsResolved = tryResolveFromPackageExports(pkg, pkgRoot, pkgName, moduleId);
+        if (exportsResolved) {
+          return exportsResolved;
+        }
+      }
+
+      if (pkgName === moduleId) {
+        if (pkg) {
+          const entryCandidates = [pkg.main, pkg.module, 'index.js']
+            .filter((entry): entry is string => typeof entry === 'string' && entry.length > 0);
+          for (const entry of entryCandidates) {
+            const resolvedEntry = tryResolveFile(pathShim.join(pkgRoot, entry));
+            if (resolvedEntry) {
+              return resolvedEntry;
+            }
+          }
+        }
+        return tryResolveFile(pathShim.join(pkgRoot, 'index'));
+      }
+
+      if (moduleId.startsWith(`${pkgName}/`)) {
+        const subPath = moduleId.slice(pkgName.length + 1);
+        const resolvedSubPath = tryResolveFile(pathShim.join(pkgRoot, subPath));
+        if (resolvedSubPath) {
+          return resolvedSubPath;
+        }
+      }
+
+      return null;
+    };
+
     // Node modules resolution
     let searchDir = fromDir;
     while (searchDir !== '/') {
@@ -975,6 +1203,13 @@ function createRequire(
       const resolved = tryResolveFromNodeModules(nodeModulesDir, id);
       if (resolved) {
         resolutionCache.set(cacheKey, resolved);
+        emitTrace({
+          type: 'resolve-success',
+          id,
+          fromDir,
+          resolvedPath: resolved,
+          reason: 'node-modules',
+        });
         return resolved;
       }
 
@@ -985,18 +1220,53 @@ function createRequire(
     const rootResolved = tryResolveFromNodeModules('/node_modules', id);
     if (rootResolved) {
       resolutionCache.set(cacheKey, rootResolved);
+      emitTrace({
+        type: 'resolve-success',
+        id,
+        fromDir,
+        resolvedPath: rootResolved,
+        reason: 'node-modules-root',
+      });
       return rootResolved;
     }
 
+    const workspaceResolved = tryResolveFromWorkspacePackages(id, fromDir);
+    if (workspaceResolved) {
+      resolutionCache.set(cacheKey, workspaceResolved);
+      emitTrace({
+        type: 'resolve-success',
+        id,
+        fromDir,
+        resolvedPath: workspaceResolved,
+        reason: 'workspace',
+      });
+      return workspaceResolved;
+    }
+
     resolutionCache.set(cacheKey, null);
+    emitTrace({
+      type: 'resolve-failure',
+      id,
+      fromDir,
+      reason: 'not-found',
+    });
     throw new Error(`Cannot find module '${id}'`);
   };
 
   const loadModule = (resolvedPath: string): Module => {
     // Return cached module
     if (moduleCache[resolvedPath]) {
+      emitTrace({
+        type: 'load-module-cache-hit',
+        resolvedPath,
+      });
       return moduleCache[resolvedPath];
     }
+
+    emitTrace({
+      type: 'load-module-start',
+      resolvedPath,
+    });
 
     // Create module object
     const module: Module = {
@@ -1022,6 +1292,10 @@ function createRequire(
       const content = vfs.readFileSync(resolvedPath, 'utf8');
       module.exports = JSON.parse(content);
       module.loaded = true;
+      emitTrace({
+        type: 'load-module-success',
+        resolvedPath,
+      });
       return module;
     }
 
@@ -1153,6 +1427,10 @@ ${code}
       );
 
       module.loaded = true;
+      emitTrace({
+        type: 'load-module-success',
+        resolvedPath,
+      });
     } catch (error) {
       // Remove from cache on error
       delete moduleCache[resolvedPath];

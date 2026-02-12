@@ -529,6 +529,7 @@ export async function writeBootstrapProjectSnapshotCache(
       key: cacheKey,
       maxEntries: limits.maxEntries,
       maxBytes: limits.maxBytes,
+      contentAddressed: true,
     },
     encoded
   );

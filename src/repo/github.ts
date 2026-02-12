@@ -214,6 +214,7 @@ async function cacheArchive(cacheKey: string, archive: ArrayBuffer): Promise<voi
       key: cacheKey,
       maxEntries: limits.maxEntries,
       maxBytes: limits.maxBytes,
+      contentAddressed: true,
     },
     bytes
   );

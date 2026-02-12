@@ -23,6 +23,13 @@ const DEFAULT_CRAWL_LINKS_LIMIT = Math.max(0, Number(process.env.PUBLIC_REPO_CRA
 const LOG_SCAN_TAIL = Math.max(10, Number(process.env.PUBLIC_REPO_LOG_SCAN_TAIL || 60));
 const MATRIX_REPORT_PATH = (process.env.PUBLIC_REPO_MATRIX_REPORT_PATH || '').trim();
 const STRICT_LOG_VALIDATION = process.env.PUBLIC_REPO_STRICT_LOG_VALIDATION === '1';
+const MATRIX_SHARD_TOTAL = Math.max(1, Number(process.env.PUBLIC_REPO_MATRIX_SHARD_TOTAL || 1));
+const RAW_MATRIX_SHARD_INDEX = Number(process.env.PUBLIC_REPO_MATRIX_SHARD_INDEX || 0);
+const MATRIX_SHARD_INDEX = Number.isFinite(RAW_MATRIX_SHARD_INDEX)
+  ? Math.max(0, Math.min(MATRIX_SHARD_TOTAL - 1, Math.floor(RAW_MATRIX_SHARD_INDEX)))
+  : 0;
+const MATRIX_ARTIFACTS_DIR = (process.env.PUBLIC_REPO_MATRIX_ARTIFACTS_DIR || '').trim();
+const CAPTURE_SCREENSHOTS = process.env.PUBLIC_REPO_CAPTURE_SCREENSHOTS === '1';
 
 const FATAL_BODY_PATTERNS: RegExp[] = [
   /\bReferenceError\b/i,
@@ -82,6 +89,8 @@ type RepoMatrixCaseResult = {
   detectedKind?: RunnableProjectKind;
   probePath?: string;
   crawledPaths?: string[];
+  screenshotPath?: string;
+  artifactPath?: string;
   logsTail: string[];
   error?: string;
 };
@@ -96,7 +105,16 @@ type RepoMatrixReport = {
   strictLogValidation: boolean;
   caseTimeoutMs: number;
   retries: number;
+  shardIndex: number;
+  shardTotal: number;
   results: RepoMatrixCaseResult[];
+};
+
+type ProbeSnapshot = {
+  path: string;
+  statusCode: number;
+  bodyPreview: string;
+  bodySample: string;
 };
 
 const PUBLIC_REPO_MATRIX: RepoMatrixCase[] = [
@@ -779,6 +797,7 @@ async function probeRunningApp(
   path: string;
   bodyPreview: string;
   crawledPaths: string[];
+  snapshots: ProbeSnapshot[];
   bodyErrorPattern?: string;
 }> {
   const bridge = getServerBridge();
@@ -786,6 +805,7 @@ async function probeRunningApp(
   let lastPath = paths[0] || '/';
   let lastPreview = '';
   let crawledPaths: string[] = [];
+  const snapshotsByPath = new Map<string, ProbeSnapshot>();
 
   const probeSinglePath = async (probePath: string) => {
     const response = await bridge.handleRequest(
@@ -799,6 +819,7 @@ async function probeRunningApp(
     );
     const body = response.body ? response.body.toString() : '';
     const bodyPreview = body.slice(0, 220);
+    const bodySample = body.slice(0, 20_000);
     const bodyForValidation = body.slice(0, 8000);
     const bodyErrorPattern = FATAL_BODY_PATTERNS.find(pattern => pattern.test(bodyForValidation));
     const hasRedirectLocation =
@@ -815,6 +836,7 @@ async function probeRunningApp(
       response,
       body,
       bodyPreview,
+      bodySample,
       bodyErrorPattern: bodyErrorPattern?.source,
     };
   };
@@ -845,6 +867,12 @@ async function probeRunningApp(
 
   for (const probePath of paths) {
     const firstProbe = await probeSinglePath(probePath);
+    snapshotsByPath.set(probePath, {
+      path: probePath,
+      statusCode: firstProbe.response.statusCode,
+      bodyPreview: firstProbe.bodyPreview,
+      bodySample: firstProbe.bodySample,
+    });
 
     if (firstProbe.ok) {
       const linksToProbe = extractLocalLinks(probePath, firstProbe.body).slice(0, crawlLinksLimit);
@@ -853,6 +881,12 @@ async function probeRunningApp(
         if (traversed.has(linkPath)) continue;
         traversed.add(linkPath);
         const linkedProbe = await probeSinglePath(linkPath);
+        snapshotsByPath.set(linkPath, {
+          path: linkPath,
+          statusCode: linkedProbe.response.statusCode,
+          bodyPreview: linkedProbe.bodyPreview,
+          bodySample: linkedProbe.bodySample,
+        });
         if (!linkedProbe.ok) {
           return {
             ok: false,
@@ -860,6 +894,7 @@ async function probeRunningApp(
             path: linkPath,
             bodyPreview: linkedProbe.bodyPreview,
             crawledPaths: [...traversed],
+            snapshots: [...snapshotsByPath.values()],
             bodyErrorPattern: linkedProbe.bodyErrorPattern,
           };
         }
@@ -871,6 +906,7 @@ async function probeRunningApp(
         path: probePath,
         bodyPreview: firstProbe.bodyPreview,
         crawledPaths,
+        snapshots: [...snapshotsByPath.values()],
         bodyErrorPattern: firstProbe.bodyErrorPattern,
       };
     }
@@ -886,6 +922,7 @@ async function probeRunningApp(
     path: lastPath,
     bodyPreview: lastPreview,
     crawledPaths,
+    snapshots: [...snapshotsByPath.values()],
   };
 }
 
@@ -912,6 +949,114 @@ async function sleep(ms: number): Promise<void> {
   await new Promise<void>(resolve => setTimeout(resolve, ms));
 }
 
+function selectShard<T>(items: T[], shardIndex: number, shardTotal: number): T[] {
+  if (shardTotal <= 1) {
+    return items;
+  }
+  return items.filter((_, index) => index % shardTotal === shardIndex);
+}
+
+function toSafeFileToken(value: string): string {
+  return value
+    .trim()
+    .replace(/[^a-zA-Z0-9._-]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '')
+    .slice(0, 120) || 'case';
+}
+
+type HtmlScreenshotRenderer = {
+  render: (html: string, outputPath: string) => Promise<void>;
+  close: () => Promise<void>;
+};
+
+async function createHtmlScreenshotRenderer(
+  enabled: boolean,
+  onInfo: (message: string) => void
+): Promise<HtmlScreenshotRenderer | null> {
+  if (!enabled) {
+    return null;
+  }
+
+  try {
+    const playwright = await import('@playwright/test');
+    const browser = await playwright.chromium.launch({
+      headless: true,
+      args: ['--disable-dev-shm-usage'],
+    });
+
+    return {
+      render: async (html: string, outputPath: string) => {
+        if (!html.trim()) {
+          return;
+        }
+        const page = await browser.newPage({
+          viewport: { width: 1280, height: 720 },
+        });
+        try {
+          const normalizedHtml = /<html[\s>]/i.test(html)
+            ? html
+            : `<!doctype html><html><body>${html}</body></html>`;
+          const dataUrl = `data:text/html;base64,${Buffer.from(normalizedHtml, 'utf8').toString('base64')}`;
+          await page.goto(dataUrl, { waitUntil: 'load', timeout: 15_000 });
+          await page.screenshot({ path: outputPath, fullPage: true });
+        } finally {
+          await page.close();
+        }
+      },
+      close: async () => {
+        await browser.close();
+      },
+    };
+  } catch (error) {
+    onInfo(`Screenshot renderer unavailable: ${String(error)}`);
+    return null;
+  }
+}
+
+async function writeCaseArtifact(
+  repoCase: RepoMatrixCase,
+  status: RepoMatrixCaseResult['status'],
+  payload: {
+    attempts: number;
+    detectedKind?: RunnableProjectKind;
+    probePath?: string;
+    crawledPaths?: string[];
+    logsTail: string[];
+    snapshots?: ProbeSnapshot[];
+    errors?: string[];
+    screenshotPath?: string;
+  }
+): Promise<string | undefined> {
+  if (!MATRIX_ARTIFACTS_DIR) {
+    return undefined;
+  }
+
+  const caseDir = path.resolve(MATRIX_ARTIFACTS_DIR, 'cases');
+  await mkdir(caseDir, { recursive: true });
+  const artifactName = `${toSafeFileToken(repoCase.name)}.json`;
+  const artifactPath = path.join(caseDir, artifactName);
+
+  const artifactPayload = {
+    generatedAt: new Date().toISOString(),
+    shardIndex: MATRIX_SHARD_INDEX,
+    shardTotal: MATRIX_SHARD_TOTAL,
+    case: repoCase,
+    status,
+    attempts: payload.attempts,
+    detectedKind: payload.detectedKind,
+    probePath: payload.probePath,
+    crawledPaths: payload.crawledPaths || [],
+    logsTail: payload.logsTail,
+    errors: payload.errors || [],
+    snapshots: payload.snapshots || [],
+    screenshotPath: payload.screenshotPath,
+  };
+
+  await writeFile(artifactPath, JSON.stringify(artifactPayload, null, 2), 'utf8');
+  return artifactPath;
+}
+
 describe.skipIf(process.env.RUN_PUBLIC_REPO_MATRIX !== '1')('public repo compatibility matrix', () => {
   it(
     'bootstraps and serves public GitHub repos',
@@ -921,14 +1066,32 @@ describe.skipIf(process.env.RUN_PUBLIC_REPO_MATRIX !== '1')('public repo compati
         .split(',')
         .map(name => name.trim())
         .filter(Boolean);
-      const matrix = requestedNames.length > 0
+      const selectedMatrix = requestedNames.length > 0
         ? PUBLIC_REPO_MATRIX.filter(repo => requestedNames.includes(repo.name))
         : PUBLIC_REPO_MATRIX;
       if (requestedNames.length > 0) {
-        expect(matrix.length).toBe(requestedNames.length);
+        expect(selectedMatrix.length).toBe(requestedNames.length);
       } else {
-        expect(matrix.length).toBeGreaterThanOrEqual(50);
+        expect(selectedMatrix.length).toBeGreaterThanOrEqual(50);
       }
+
+      const matrix = selectShard(selectedMatrix, MATRIX_SHARD_INDEX, MATRIX_SHARD_TOTAL);
+      if (MATRIX_SHARD_TOTAL > 1 && selectedMatrix.length >= MATRIX_SHARD_TOTAL) {
+        expect(matrix.length).toBeGreaterThan(0);
+      }
+      if (MATRIX_SHARD_INDEX >= MATRIX_SHARD_TOTAL) {
+        throw new Error(
+          `Invalid matrix shard configuration index=${MATRIX_SHARD_INDEX} total=${MATRIX_SHARD_TOTAL}`
+        );
+      }
+      console.log(
+        `[matrix] shard ${MATRIX_SHARD_INDEX + 1}/${MATRIX_SHARD_TOTAL} selected ${matrix.length}/${selectedMatrix.length} cases`
+      );
+
+      const screenshotRenderer = await createHtmlScreenshotRenderer(
+        Boolean(MATRIX_ARTIFACTS_DIR) && CAPTURE_SCREENSHOTS,
+        (message) => console.log(`[matrix] ${message}`)
+      );
 
       const report: RepoMatrixReport = {
         version: 1,
@@ -940,119 +1103,161 @@ describe.skipIf(process.env.RUN_PUBLIC_REPO_MATRIX !== '1')('public repo compati
         strictLogValidation: STRICT_LOG_VALIDATION,
         caseTimeoutMs: CASE_TIMEOUT_MS,
         retries: CASE_RETRIES,
+        shardIndex: MATRIX_SHARD_INDEX,
+        shardTotal: MATRIX_SHARD_TOTAL,
         results: [],
       };
 
-      for (const repoCase of matrix) {
-        const caseStartedAt = Date.now();
-        const attemptErrors: string[] = [];
-        let passed = false;
-        let attempts = 0;
-        let detectedKind: RunnableProjectKind | undefined;
-        let probePath: string | undefined;
-        let crawledPaths: string[] | undefined;
-        let logsTail: string[] = [];
-        console.log(`[matrix] start ${repoCase.name}`);
+      try {
+        for (const repoCase of matrix) {
+          const caseStartedAt = Date.now();
+          const attemptErrors: string[] = [];
+          let passed = false;
+          let attempts = 0;
+          let detectedKind: RunnableProjectKind | undefined;
+          let probePath: string | undefined;
+          let crawledPaths: string[] | undefined;
+          let logsTail: string[] = [];
+          let snapshots: ProbeSnapshot[] | undefined;
+          let screenshotPath: string | undefined;
+          console.log(`[matrix] start ${repoCase.name}`);
 
-        for (let attempt = 1; attempt <= CASE_RETRIES; attempt += 1) {
-          attempts = attempt;
-          let running: Awaited<ReturnType<typeof bootstrapAndRunGitHubProject>>['running'] | undefined;
-          const logs: string[] = [];
-          if (attempt > 1) {
-            console.log(`[matrix] retry ${repoCase.name} (attempt ${attempt}/${CASE_RETRIES})`);
-          }
-          resetServerBridge();
-
-          try {
-            const started = await withTimeout(
-              bootstrapAndRunGitHubProject(repoCase.url, {
-                skipInstall: repoCase.skipInstall,
-                initServiceWorker: false,
-                includeDev: repoCase.includeDev,
-                transformProjectSources: repoCase.transformProjectSources,
-                serverReadyTimeoutMs: repoCase.serverReadyTimeoutMs ?? 45_000,
-                onProgress: (message) => {
-                  logs.push(`[progress] ${message}`);
-                },
-                log: (message) => {
-                  logs.push(message);
-                },
-              }),
-              CASE_TIMEOUT_MS,
-              repoCase.name
-            );
-
-            running = started.running;
-            expect(started.detected.kind).toBe(repoCase.expectedKind);
-            detectedKind = started.detected.kind;
-
-            const probe = await withTimeout(
-            probeRunningApp(
-              running.port,
-              repoCase.probePaths || ['/', '/index.html'],
-              repoCase.crawlLinksLimit ?? DEFAULT_CRAWL_LINKS_LIMIT
-            ),
-              30_000,
-              `${repoCase.name} probe`
-            );
-
-            if (!probe.ok) {
-              throw new Error(
-                `probe failed at ${probe.path} with status ${probe.statusCode}; body preview: ${probe.bodyPreview}; body error pattern: ${probe.bodyErrorPattern || 'none'}; crawled: ${probe.crawledPaths.join(', ')}`
-              );
-            }
-            probePath = probe.path;
-            crawledPaths = probe.crawledPaths;
-
-            const fatalLogs = findFatalLogs(logs);
-            if (fatalLogs.length > 0) {
-              throw new Error(`fatal runtime logs detected:\n${fatalLogs.slice(0, 10).join('\n')}`);
-            }
-
-            logsTail = logs.slice(-25);
-            console.log(`[matrix] pass ${repoCase.name} (${started.detected.kind})`);
-            passed = true;
-            break;
-          } catch (error) {
-            const renderedError = String(error);
-            logsTail = logs.slice(-25);
-            attemptErrors.push(
-              `attempt ${attempt}/${CASE_RETRIES}: ${renderedError}\nrecent logs:\n${logs.slice(-25).join('\n')}`
-            );
-            console.log(`[matrix] fail ${repoCase.name} attempt ${attempt}/${CASE_RETRIES}: ${renderedError}`);
-          } finally {
-            try {
-              running?.stop();
-            } catch {
-              // ignore cleanup issues and continue
+          for (let attempt = 1; attempt <= CASE_RETRIES; attempt += 1) {
+            attempts = attempt;
+            let running: Awaited<ReturnType<typeof bootstrapAndRunGitHubProject>>['running'] | undefined;
+            const logs: string[] = [];
+            if (attempt > 1) {
+              console.log(`[matrix] retry ${repoCase.name} (attempt ${attempt}/${CASE_RETRIES})`);
             }
             resetServerBridge();
+
+            try {
+              const started = await withTimeout(
+                bootstrapAndRunGitHubProject(repoCase.url, {
+                  skipInstall: repoCase.skipInstall,
+                  initServiceWorker: false,
+                  includeDev: repoCase.includeDev,
+                  transformProjectSources: repoCase.transformProjectSources,
+                  serverReadyTimeoutMs: repoCase.serverReadyTimeoutMs ?? 45_000,
+                  onProgress: (message) => {
+                    logs.push(`[progress] ${message}`);
+                  },
+                  log: (message) => {
+                    logs.push(message);
+                  },
+                }),
+                CASE_TIMEOUT_MS,
+                repoCase.name
+              );
+
+              running = started.running;
+              expect(started.detected.kind).toBe(repoCase.expectedKind);
+              detectedKind = started.detected.kind;
+
+              const probe = await withTimeout(
+                probeRunningApp(
+                  running.port,
+                  repoCase.probePaths || ['/', '/index.html'],
+                  repoCase.crawlLinksLimit ?? DEFAULT_CRAWL_LINKS_LIMIT
+                ),
+                30_000,
+                `${repoCase.name} probe`
+              );
+
+              if (!probe.ok) {
+                throw new Error(
+                  `probe failed at ${probe.path} with status ${probe.statusCode}; body preview: ${probe.bodyPreview}; body error pattern: ${probe.bodyErrorPattern || 'none'}; crawled: ${probe.crawledPaths.join(', ')}`
+                );
+              }
+              probePath = probe.path;
+              crawledPaths = probe.crawledPaths;
+              snapshots = probe.snapshots;
+
+              const fatalLogs = findFatalLogs(logs);
+              if (fatalLogs.length > 0) {
+                throw new Error(`fatal runtime logs detected:\n${fatalLogs.slice(0, 10).join('\n')}`);
+              }
+
+              logsTail = logs.slice(-25);
+
+              if (screenshotRenderer && MATRIX_ARTIFACTS_DIR) {
+                const primarySnapshot = probe.snapshots.find(item => item.path === probe.path) || probe.snapshots[0];
+                if (primarySnapshot && primarySnapshot.bodySample.trim()) {
+                  const screenshotDir = path.resolve(MATRIX_ARTIFACTS_DIR, 'screenshots');
+                  await mkdir(screenshotDir, { recursive: true });
+                  const screenshotAbsolutePath = path.join(screenshotDir, `${toSafeFileToken(repoCase.name)}.png`);
+                  await screenshotRenderer.render(primarySnapshot.bodySample, screenshotAbsolutePath);
+                  screenshotPath = path.relative(process.cwd(), screenshotAbsolutePath);
+                }
+              }
+
+              console.log(`[matrix] pass ${repoCase.name} (${started.detected.kind})`);
+              passed = true;
+              break;
+            } catch (error) {
+              const renderedError = String(error);
+              logsTail = logs.slice(-25);
+              attemptErrors.push(
+                `attempt ${attempt}/${CASE_RETRIES}: ${renderedError}\nrecent logs:\n${logs.slice(-25).join('\n')}`
+              );
+              console.log(`[matrix] fail ${repoCase.name} attempt ${attempt}/${CASE_RETRIES}: ${renderedError}`);
+            } finally {
+              try {
+                running?.stop();
+              } catch {
+                // ignore cleanup issues and continue
+              }
+              resetServerBridge();
+            }
+
+            if (!passed && attempt < CASE_RETRIES) {
+              await sleep(CASE_RETRY_DELAY_MS * attempt);
+            }
           }
 
-          if (!passed && attempt < CASE_RETRIES) {
-            await sleep(CASE_RETRY_DELAY_MS * attempt);
+          let artifactPath: string | undefined;
+          try {
+            const maybeArtifact = await writeCaseArtifact(repoCase, passed ? 'pass' : 'fail', {
+              attempts,
+              detectedKind,
+              probePath,
+              crawledPaths,
+              logsTail,
+              snapshots,
+              errors: passed ? undefined : attemptErrors,
+              screenshotPath,
+            });
+            artifactPath = maybeArtifact
+              ? path.relative(process.cwd(), maybeArtifact)
+              : undefined;
+          } catch (error) {
+            console.warn(`[matrix] case artifact write failed (${repoCase.name}): ${String(error)}`);
+          }
+
+          report.results.push({
+            name: repoCase.name,
+            url: repoCase.url,
+            expectedKind: repoCase.expectedKind,
+            status: passed ? 'pass' : 'fail',
+            attempts,
+            durationMs: Date.now() - caseStartedAt,
+            detectedKind,
+            probePath,
+            crawledPaths,
+            screenshotPath,
+            artifactPath,
+            logsTail,
+            error: passed ? undefined : attemptErrors.join('\n\n'),
+          });
+
+          if (!passed) {
+            failures.push(
+              `[${repoCase.name}] ${repoCase.url}\n${attemptErrors.join('\n\n')}`
+            );
           }
         }
-
-        report.results.push({
-          name: repoCase.name,
-          url: repoCase.url,
-          expectedKind: repoCase.expectedKind,
-          status: passed ? 'pass' : 'fail',
-          attempts,
-          durationMs: Date.now() - caseStartedAt,
-          detectedKind,
-          probePath,
-          crawledPaths,
-          logsTail,
-          error: passed ? undefined : attemptErrors.join('\n\n'),
-        });
-
-        if (!passed) {
-          failures.push(
-            `[${repoCase.name}] ${repoCase.url}\n${attemptErrors.join('\n\n')}`
-          );
-        }
+      } finally {
+        await screenshotRenderer?.close();
       }
 
       report.passCount = report.results.filter(result => result.status === 'pass').length;

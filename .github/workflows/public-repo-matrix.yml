@@ -1,0 +1,61 @@
+name: Public Repo Matrix
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: public-repo-matrix-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  MATRIX_SHARDS: 4
+  RUN_PUBLIC_REPO_MATRIX: '1'
+  PUBLIC_REPO_CASE_RETRIES: '2'
+  PUBLIC_REPO_CASE_TIMEOUT_MS: '240000'
+  PUBLIC_REPO_CRAWL_LINKS_LIMIT: '10'
+
+jobs:
+  matrix:
+    name: matrix-shard-${{ matrix.shard }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Use Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Run public repo matrix shard
+        run: >
+          npm run test:public-repos --
+          --strict-logs
+          --screenshots
+          --shard-index=${{ matrix.shard }}
+          --shard-total=${{ env.MATRIX_SHARDS }}
+          --report=test-results/public-repo-matrix-shard-${{ matrix.shard }}.json
+          --artifacts-dir=test-results/public-repo-matrix/shard-${{ matrix.shard }}
+
+      - name: Upload shard artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: public-repo-matrix-shard-${{ matrix.shard }}
+          path: |
+            test-results/public-repo-matrix-shard-${{ matrix.shard }}.json
+            test-results/public-repo-matrix/shard-${{ matrix.shard }}

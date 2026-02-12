@@ -440,6 +440,7 @@ async function cacheHttpResponse(
       key: cacheKey,
       maxEntries: limits.maxEntries,
       maxBytes: limits.maxBytes,
+      contentAddressed: true,
     },
     payloadBytes
   );

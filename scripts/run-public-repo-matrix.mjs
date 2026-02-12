@@ -8,11 +8,19 @@ function parseArgs(argv) {
     names: '',
     report: '',
     strictLogs: false,
+    shardIndex: '',
+    shardTotal: '',
+    artifactsDir: '',
+    captureScreenshots: false,
   };
 
   for (const arg of argv) {
     if (arg === '--strict-logs') {
       parsed.strictLogs = true;
+      continue;
+    }
+    if (arg === '--screenshots') {
+      parsed.captureScreenshots = true;
       continue;
     }
     if (arg.startsWith('--names=')) {
@@ -21,6 +29,25 @@ function parseArgs(argv) {
     }
     if (arg.startsWith('--report=')) {
       parsed.report = arg.slice('--report='.length).trim();
+      continue;
+    }
+    if (arg.startsWith('--shard-index=')) {
+      parsed.shardIndex = arg.slice('--shard-index='.length).trim();
+      continue;
+    }
+    if (arg.startsWith('--shard-total=')) {
+      parsed.shardTotal = arg.slice('--shard-total='.length).trim();
+      continue;
+    }
+    if (arg.startsWith('--shard=')) {
+      const value = arg.slice('--shard='.length).trim();
+      const [index, total] = value.split('/', 2);
+      parsed.shardIndex = index?.trim() || '';
+      parsed.shardTotal = total?.trim() || '';
+      continue;
+    }
+    if (arg.startsWith('--artifacts-dir=')) {
+      parsed.artifactsDir = arg.slice('--artifacts-dir='.length).trim();
       continue;
     }
   }
@@ -44,6 +71,18 @@ if (args.names) {
 }
 if (args.strictLogs) {
   env.PUBLIC_REPO_STRICT_LOG_VALIDATION = '1';
+}
+if (args.shardIndex) {
+  env.PUBLIC_REPO_MATRIX_SHARD_INDEX = args.shardIndex;
+}
+if (args.shardTotal) {
+  env.PUBLIC_REPO_MATRIX_SHARD_TOTAL = args.shardTotal;
+}
+if (args.artifactsDir) {
+  env.PUBLIC_REPO_MATRIX_ARTIFACTS_DIR = path.resolve(process.cwd(), args.artifactsDir);
+}
+if (args.captureScreenshots) {
+  env.PUBLIC_REPO_CAPTURE_SCREENSHOTS = '1';
 }
 
 const child = spawn(

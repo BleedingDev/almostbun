@@ -9,6 +9,7 @@ export interface PackageJson {
   browser?: string | Record<string, string | false>;
   types?: string;
   exports?: Record<string, unknown> | string;
+  workspaces?: string[] | { packages?: string[] };
   dependencies?: Record<string, string>;
   devDependencies?: Record<string, string>;
   peerDependencies?: Record<string, string>;

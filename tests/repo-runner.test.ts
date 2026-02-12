@@ -951,4 +951,33 @@ bun.serve({
 
     running.stop();
   });
+
+  it('emits structured trace events during startup', async () => {
+    const vfs = new VirtualFS();
+    vfs.writeFileSync('/project/index.html', '<h1>trace</h1>');
+
+    const detected = detectRunnableProject(vfs, { projectPath: '/project' });
+    const traces: Array<{ sequence: number; phase: string; message: string }> = [];
+    const running = await startDetectedProject(vfs, detected, {
+      initServiceWorker: false,
+      port: 4097,
+      onTraceEvent: (event) => {
+        traces.push({
+          sequence: event.sequence,
+          phase: event.phase,
+          message: event.message,
+        });
+      },
+    });
+
+    expect(traces.length).toBeGreaterThan(0);
+    expect(traces.some(trace => trace.phase === 'start')).toBe(true);
+    expect(traces.some(trace => trace.phase === 'server')).toBe(true);
+    expect(traces[0]!.sequence).toBe(0);
+    for (let i = 1; i < traces.length; i += 1) {
+      expect(traces[i]!.sequence).toBeGreaterThan(traces[i - 1]!.sequence);
+    }
+
+    running.stop();
+  });
 });

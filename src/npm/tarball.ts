@@ -207,6 +207,7 @@ async function cacheTarball(
       key: cacheKey,
       maxEntries: limits.maxEntries,
       maxBytes: limits.maxBytes,
+      contentAddressed: true,
     },
     bytes
   );

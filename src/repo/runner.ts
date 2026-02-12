@@ -13,6 +13,7 @@ import {
   type BootstrapGitHubProjectOptions,
   type BootstrapGitHubProjectResult,
 } from './bootstrap';
+import { runRepoPreflight, type RepoPreflightResult } from './preflight';
 
 type PackageJsonLike = {
   scripts?: Record<string, string>;
@@ -107,6 +108,10 @@ export interface StartDetectedProjectOptions {
    * @default false
    */
   disableViteHmrInjection?: boolean;
+  /**
+   * Structured trace callback for deterministic diagnostics.
+   */
+  onTraceEvent?: (event: RepoRunTraceEvent) => void;
 }
 
 export interface RunningProject {
@@ -127,13 +132,31 @@ export interface BootstrapAndRunOptions
    * @default '/project'
    */
   destPath?: string;
+  /**
+   * Preflight validation mode.
+   * - off: skip preflight checks
+   * - warn: log issues and continue
+   * - strict: throw when preflight finds errors
+   * @default warn
+   */
+  preflightMode?: 'off' | 'warn' | 'strict';
 }
 
 export interface BootstrapAndRunResult {
   vfs: VirtualFS;
   bootstrap: BootstrapGitHubProjectResult;
+  preflight: RepoPreflightResult;
   detected: DetectedRunnableProject;
   running: RunningProject;
+  trace: RepoRunTraceEvent[];
+}
+
+export interface RepoRunTraceEvent {
+  sequence: number;
+  atMs: number;
+  phase: string;
+  message: string;
+  data?: Record<string, unknown>;
 }
 
 interface ModernJsSiblingDistProject {
@@ -1132,6 +1155,31 @@ function waitForScriptServerPort(
   });
 }
 
+function createTraceCollector(
+  callback?: (event: RepoRunTraceEvent) => void
+): {
+  events: RepoRunTraceEvent[];
+  emit: (phase: string, message: string, data?: Record<string, unknown>) => void;
+} {
+  const events: RepoRunTraceEvent[] = [];
+  const startedAt = Date.now();
+  let sequence = 0;
+  return {
+    events,
+    emit: (phase, message, data) => {
+      const event: RepoRunTraceEvent = {
+        sequence: sequence++,
+        atMs: Date.now() - startedAt,
+        phase,
+        message,
+        data,
+      };
+      events.push(event);
+      callback?.(event);
+    },
+  };
+}
+
 /**
  * Detect runnable project type for a VFS path.
  */
@@ -1190,13 +1238,23 @@ export async function startDetectedProject(
   detected: DetectedRunnableProject,
   options: StartDetectedProjectOptions = {}
 ): Promise<RunningProject> {
+  const localTrace = createTraceCollector(options.onTraceEvent);
+  const emitTrace = localTrace.emit;
   const bridge = options.bridge || getServerBridge();
   const log = options.log;
+  emitTrace('start', 'Starting detected project', {
+    kind: detected.kind,
+    projectPath: detected.projectPath,
+  });
   const shouldInitServiceWorker = options.initServiceWorker ?? (typeof window !== 'undefined');
   await ensureServiceWorker(bridge, shouldInitServiceWorker, log);
 
   const preferredPort = options.port ?? DEFAULT_PORTS[detected.kind];
   const selectedPort = choosePort(bridge, preferredPort);
+  emitTrace('port', 'Selected project port', {
+    preferredPort,
+    selectedPort,
+  });
 
   if (detected.kind === 'node-script') {
     if (!detected.entryPath) {
@@ -1217,6 +1275,13 @@ export async function startDetectedProject(
       cwd: detected.projectPath,
       env,
       argv,
+      onTrace: (event) => {
+        emitTrace('runtime', event.type, {
+          id: event.id,
+          reason: event.reason,
+          resolvedPath: event.resolvedPath,
+        });
+      },
       onConsole: (method, args) => {
         const rendered = args.map(arg => {
           if (typeof arg === 'string') return arg;
@@ -1237,6 +1302,10 @@ export async function startDetectedProject(
     const newlyRegistered = bridge.getServerPorts().find(port => !beforePorts.has(port));
     const finalPort = runtimePort ?? newlyRegistered;
     if (!finalPort) {
+      emitTrace('node-script', 'No HTTP server registered by entry script', {
+        entryPath: detected.entryPath,
+        timeoutMs,
+      });
       throw new Error(
         `Entry script ran (${detected.entryPath}) but no HTTP server was registered. ` +
         'The script must call server.listen(...) during startup.'
@@ -1244,6 +1313,11 @@ export async function startDetectedProject(
     }
 
     const url = `${bridge.getServerUrl(finalPort)}/`;
+    emitTrace('node-script', 'Node script server started', {
+      finalPort,
+      url,
+      entryPath: detected.entryPath,
+    });
     return {
       kind: detected.kind,
       projectPath: detected.projectPath,
@@ -1292,6 +1366,13 @@ export async function startDetectedProject(
         cwd: detected.projectPath,
         env,
         argv,
+        onTrace: (event) => {
+          emitTrace('runtime-api', event.type, {
+            id: event.id,
+            reason: event.reason,
+            resolvedPath: event.resolvedPath,
+          });
+        },
         onConsole: (method, args) => {
           const rendered = args.map(arg => {
             if (typeof arg === 'string') return arg;
@@ -1316,15 +1397,28 @@ export async function startDetectedProject(
           apiProxyPort = finalSidecarPort;
           auxiliaryRuntime = runtime;
           auxiliaryPorts.push(finalSidecarPort);
+          emitTrace('vite-sidecar', 'API sidecar started', {
+            source: sidecarEntry.source,
+            entryPath: sidecarEntry.entryPath,
+            port: finalSidecarPort,
+          });
           log?.(
             `Started API sidecar via ${sidecarEntry.source}: ${sidecarEntry.entryPath} -> ${bridge.getServerUrl(finalSidecarPort)}/`
           );
         } else {
+          emitTrace('vite-sidecar', 'API sidecar did not register HTTP server', {
+            entryPath: sidecarEntry.entryPath,
+            timeoutMs,
+          });
           log?.(
             `API sidecar entry (${sidecarEntry.entryPath}) did not register an HTTP server within ${timeoutMs}ms; continuing without /api proxy`
           );
         }
       } catch (error) {
+        emitTrace('vite-sidecar', 'API sidecar failed', {
+          entryPath: sidecarEntry.entryPath,
+          error: String(error),
+        });
         log?.(
           `API sidecar failed (${sidecarEntry.entryPath}): ${String(error)}; continuing without /api proxy`
         );
@@ -1386,14 +1480,27 @@ export async function startDetectedProject(
           server: siblingServer,
         });
         auxiliaryPorts.push(sibling.port);
+        emitTrace('modernjs-sibling', 'Started sibling server', {
+          projectPath: sibling.projectPath,
+          port: sibling.port,
+        });
         log?.(`Started sibling modernjs-dist server at ${bridge.getServerUrl(sibling.port)}/`);
       } catch (error) {
+        emitTrace('modernjs-sibling', 'Failed to start sibling server', {
+          projectPath: sibling.projectPath,
+          error: String(error),
+        });
         log?.(`Failed to start sibling modernjs-dist server (${sibling.projectPath}): ${String(error)}`);
       }
     }
   }
 
   const url = `${bridge.getServerUrl(selectedPort)}/`;
+  emitTrace('server', 'Server started', {
+    kind: detected.kind,
+    selectedPort,
+    url,
+  });
   log?.(`Started ${detected.kind} server at ${url}`);
 
   return {
@@ -1444,21 +1551,76 @@ export async function bootstrapAndRunGitHubProject(
   repoUrl: string,
   options: BootstrapAndRunOptions = {}
 ): Promise<BootstrapAndRunResult> {
+  const trace = createTraceCollector(options.onTraceEvent);
+  trace.emit('bootstrap', 'Starting bootstrap and run flow', { repoUrl });
   const vfs = new VirtualFS();
+  trace.emit('bootstrap', 'Initialized virtual filesystem');
   const bootstrap = await bootstrapGitHubProject(vfs, repoUrl, {
     ...options,
     destPath: options.destPath || '/project',
   });
+  trace.emit('bootstrap', 'Repository bootstrap complete', {
+    projectPath: bootstrap.projectPath,
+    extractedFiles: bootstrap.extractedFiles.length,
+    transformedProjectFiles: bootstrap.transformedProjectFiles || 0,
+  });
+
+  const preflightMode = options.preflightMode ?? 'warn';
+  const preflight = preflightMode === 'off'
+    ? { issues: [], installOverrides: {}, hasErrors: false }
+    : runRepoPreflight(vfs, bootstrap.projectPath, {
+      autoFix: false,
+    });
+  if (preflightMode !== 'off') {
+    for (const issue of preflight.issues) {
+      trace.emit('preflight', issue.message, {
+        code: issue.code,
+        severity: issue.severity,
+        path: issue.path,
+      });
+      options.log?.(`[preflight:${issue.severity}] ${issue.message}${issue.path ? ` (${issue.path})` : ''}`);
+    }
+    if (preflightMode === 'strict' && preflight.hasErrors) {
+      const blocking = preflight.issues
+        .filter(issue => issue.severity === 'error')
+        .map(issue => `${issue.code}: ${issue.message}${issue.path ? ` (${issue.path})` : ''}`)
+        .join('\n');
+      trace.emit('preflight', 'Strict preflight failed', {
+        blockingIssues: preflight.issues.filter(issue => issue.severity === 'error').length,
+      });
+      throw new Error(`Strict preflight failed:\n${blocking}`);
+    }
+  }
 
   const detected = detectRunnableProject(vfs, {
     projectPath: bootstrap.projectPath,
   });
+  trace.emit('detect', 'Detected runnable project', {
+    kind: detected.kind,
+    reason: detected.reason,
+    projectPath: detected.projectPath,
+    serverRoot: detected.serverRoot,
+  });
 
-  const running = await startDetectedProject(vfs, detected, options);
+  const externalTraceHandler = options.onTraceEvent;
+  const running = await startDetectedProject(vfs, detected, {
+    ...options,
+    onTraceEvent: (event) => {
+      trace.emit(`start:${event.phase}`, event.message, event.data);
+      externalTraceHandler?.(event);
+    },
+  });
+  trace.emit('ready', 'Running project ready', {
+    kind: running.kind,
+    port: running.port,
+    url: running.url,
+  });
   return {
     vfs,
     bootstrap,
+    preflight,
     detected,
     running,
+    trace: trace.events,
   };
 }

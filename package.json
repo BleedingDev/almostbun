@@ -77,6 +77,7 @@
     "test": "vitest",
     "test:run": "vitest run",
     "test:public-repos": "node ./scripts/run-public-repo-matrix.mjs",
+    "test:bun-parity": "RUN_BUN_CLI_PARITY=1 vitest run tests/bun-cli-parity.test.ts",
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",
     "test:e2e:debug": "playwright test --debug",

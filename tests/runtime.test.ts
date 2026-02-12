@@ -497,6 +497,94 @@ describe('Runtime', () => {
       expect(exports).toBe('simple');
     });
 
+    it('should resolve package exports preferring require/default over browser for subpaths', () => {
+      vfs.writeFileSync(
+        '/node_modules/cond-pkg/package.json',
+        JSON.stringify({
+          name: 'cond-pkg',
+          exports: {
+            '.': {
+              require: './require.js',
+              browser: './browser.js',
+              default: './default.js',
+            },
+            './feature': {
+              require: './feature-require.js',
+              browser: './feature-browser.js',
+              default: './feature-default.js',
+            },
+          },
+        })
+      );
+      vfs.writeFileSync('/node_modules/cond-pkg/require.js', 'module.exports = "require-root";');
+      vfs.writeFileSync('/node_modules/cond-pkg/browser.js', 'module.exports = "browser-root";');
+      vfs.writeFileSync('/node_modules/cond-pkg/default.js', 'module.exports = "default-root";');
+      vfs.writeFileSync('/node_modules/cond-pkg/feature-require.js', 'module.exports = "require-feature";');
+      vfs.writeFileSync('/node_modules/cond-pkg/feature-browser.js', 'module.exports = "browser-feature";');
+      vfs.writeFileSync('/node_modules/cond-pkg/feature-default.js', 'module.exports = "default-feature";');
+
+      const { exports } = runtime.execute(`
+        module.exports = {
+          root: require('cond-pkg'),
+          feature: require('cond-pkg/feature'),
+        };
+      `);
+
+      expect(exports).toEqual({
+        root: 'require-root',
+        feature: 'require-feature',
+      });
+    });
+
+    it('should resolve workspace packages when they are not linked into node_modules', () => {
+      vfs.writeFileSync(
+        '/repo/package.json',
+        JSON.stringify({
+          name: 'workspace-root',
+          private: true,
+          workspaces: ['./packages/*'],
+        })
+      );
+      vfs.writeFileSync(
+        '/repo/packages/shared/package.json',
+        JSON.stringify({
+          name: '@demo/shared',
+          main: 'src/index.js',
+          exports: {
+            '.': './src/index.js',
+          },
+        })
+      );
+      vfs.writeFileSync('/repo/packages/shared/src/index.js', 'module.exports = { shared: "ok" };');
+      vfs.writeFileSync('/repo/apps/web/entry.js', 'module.exports = require("@demo/shared");');
+
+      const workspaceRuntime = new Runtime(vfs, { cwd: '/repo/apps/web' });
+      const { exports } = workspaceRuntime.runFile('/repo/apps/web/entry.js');
+
+      expect(exports).toEqual({ shared: 'ok' });
+    });
+
+    it('should fall back to browser export when package only exposes browser condition', () => {
+      vfs.writeFileSync(
+        '/node_modules/browser-only-pkg/package.json',
+        JSON.stringify({
+          name: 'browser-only-pkg',
+          exports: {
+            '.': {
+              browser: './browser.js',
+            },
+          },
+        })
+      );
+      vfs.writeFileSync('/node_modules/browser-only-pkg/browser.js', 'module.exports = "browser-only";');
+
+      const { exports } = runtime.execute(`
+        module.exports = require('browser-only-pkg');
+      `);
+
+      expect(exports).toBe('browser-only');
+    });
+
     it('should not transform bundled CJS files that contain import/export text in templates', () => {
       vfs.writeFileSync(
         '/node_modules/template-pkg/package.json',
@@ -546,6 +634,33 @@ export default "x";
       expect(() =>
         runtime.execute('require("nonexistent-module");')
       ).toThrow(/Cannot find module/);
+    });
+
+    it('should emit deterministic resolve/load trace events', () => {
+      const traces: Array<{ type: string; id?: string; resolvedPath?: string; reason?: string }> = [];
+      vfs.writeFileSync('/lib/traced.js', 'module.exports = 7;');
+
+      const tracedRuntime = new Runtime(vfs, {
+        onTrace: (event) => {
+          traces.push({
+            type: event.type,
+            id: event.id,
+            resolvedPath: event.resolvedPath,
+            reason: event.reason,
+          });
+        },
+      });
+
+      const { exports } = tracedRuntime.execute(`
+        const first = require('./lib/traced');
+        const second = require('./lib/traced');
+        module.exports = first + second;
+      `);
+      expect(exports).toBe(14);
+      expect(traces.some(event => event.type === 'resolve-cache-miss' && event.id === './lib/traced')).toBe(true);
+      expect(traces.some(event => event.type === 'resolve-cache-hit' && event.id === './lib/traced')).toBe(true);
+      expect(traces.some(event => event.type === 'load-module-start' && event.resolvedPath === '/lib/traced.js')).toBe(true);
+      expect(traces.some(event => event.type === 'load-module-cache-hit' && event.resolvedPath === '/lib/traced.js')).toBe(true);
     });
   });
 
