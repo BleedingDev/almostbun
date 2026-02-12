@@ -1,7 +1,7 @@
 import { defineConfig } from 'vite';
 import { resolve } from 'path';
 import wasm from 'vite-plugin-wasm';
-import topLevelAwait from 'vite-plugin-top-level-await';
+
 
 const isTest = process.env.VITEST === 'true';
 export default defineConfig({
@@ -17,7 +17,6 @@ export default defineConfig({
   },
   plugins: isTest ? [] : [
     wasm(),
-    topLevelAwait(),
     {
       name: 'browser-shims',
       enforce: 'pre',
@@ -68,6 +67,7 @@ export default defineConfig({
     format: 'es',
   },
   build: {
+    target: 'esnext',
     commonjsOptions: {
       transformMixedEsModules: true,
     },
