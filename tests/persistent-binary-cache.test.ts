@@ -332,7 +332,11 @@ class FakeOpfsFileHandle {
   async getFile(): Promise<{ arrayBuffer: () => Promise<ArrayBuffer>; text: () => Promise<string> }> {
     const snapshot = this.file.bytes.slice();
     return {
-      arrayBuffer: async () => snapshot.buffer.slice(0),
+      arrayBuffer: async () => {
+        const copy = new Uint8Array(snapshot.byteLength);
+        copy.set(snapshot);
+        return copy.buffer;
+      },
       text: async () => new TextDecoder().decode(snapshot),
     };
   }
@@ -357,7 +361,9 @@ class FakeOpfsFileHandle {
 
         const incoming = toUint8Array(data);
         if (wasTruncated) {
-          staged = incoming;
+          const truncatedCopy = new Uint8Array(incoming.byteLength);
+          truncatedCopy.set(incoming);
+          staged = truncatedCopy;
           return;
         }
 
@@ -379,8 +385,13 @@ function toUint8Array(input: string | BufferSource): Uint8Array {
   }
 
   if (input instanceof ArrayBuffer) {
-    return new Uint8Array(input);
+    const copy = new Uint8Array(input.byteLength);
+    copy.set(new Uint8Array(input));
+    return copy;
   }
 
-  return new Uint8Array(input.buffer, input.byteOffset, input.byteLength);
+  const view = new Uint8Array(input.buffer, input.byteOffset, input.byteLength);
+  const copy = new Uint8Array(view.byteLength);
+  copy.set(view);
+  return copy;
 }

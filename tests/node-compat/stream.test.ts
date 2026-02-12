@@ -21,6 +21,17 @@ import Stream, {
 import * as util from '../../src/shims/util';
 import { assert } from './common';
 
+const nextMicrotask = (): Promise<void> =>
+  new Promise<void>(resolve => queueMicrotask(() => resolve()));
+
+const waitForEvent = (
+  emitter: { once: (event: string, listener: (...args: unknown[]) => void) => unknown },
+  event: string
+): Promise<void> =>
+  new Promise<void>(resolve => {
+    emitter.once(event, () => resolve());
+  });
+
 describe('Stream module (Node.js compat)', () => {
   describe('Stream class', () => {
     it('should be exported as default', () => {
@@ -88,7 +99,7 @@ describe('Stream module (Node.js compat)', () => {
       source.emit('data', Buffer.from('legacy'));
       source.emit('end');
 
-      await new Promise(resolve => queueMicrotask(resolve));
+      await new Promise<void>(resolve => queueMicrotask(() => resolve()));
 
       expect(Buffer.concat(received).toString()).toBe('legacy');
       expect(pipeEventFired).toBe(true);
@@ -129,6 +140,7 @@ describe('Stream module (Node.js compat)', () => {
       it('should emit end event when push(null) is called', async () => {
         const readable = new Readable();
         let ended = false;
+        const endPromise = waitForEvent(readable, 'end');
 
         readable.on('data', () => {});
         readable.on('end', () => {
@@ -141,8 +153,7 @@ describe('Stream module (Node.js compat)', () => {
         readable.push(Buffer.from('data'));
         readable.push(null);
 
-        // Wait for end event
-        await new Promise(resolve => setTimeout(resolve, 10));
+        await endPromise;
 
         assert.strictEqual(ended, true);
       });
@@ -180,8 +191,7 @@ describe('Stream module (Node.js compat)', () => {
         readable.pause();
         readable.push(Buffer.from('chunk2')); // Should be buffered
 
-        // Give some time to ensure chunk2 isn't emitted
-        await new Promise(resolve => setTimeout(resolve, 10));
+        await nextMicrotask();
 
         assert.strictEqual(chunks.length, 1);
 
@@ -241,6 +251,7 @@ describe('Stream module (Node.js compat)', () => {
       it('should pipe to writable', async () => {
         const readable = new Readable();
         const writable = new Writable();
+        const finishPromise = waitForEvent(writable, 'finish');
 
         readable.pipe(writable);
 
@@ -248,8 +259,7 @@ describe('Stream module (Node.js compat)', () => {
         readable.push(Buffer.from(' world'));
         readable.push(null);
 
-        // Wait for pipe to complete
-        await new Promise(resolve => setTimeout(resolve, 20));
+        await finishPromise;
 
         assert.strictEqual(writable.getBufferAsString(), 'hello world');
       });
@@ -257,13 +267,14 @@ describe('Stream module (Node.js compat)', () => {
       it('should end destination when source ends', async () => {
         const readable = new Readable();
         const writable = new Writable();
+        const finishPromise = waitForEvent(writable, 'finish');
 
         readable.pipe(writable);
 
         readable.push(Buffer.from('data'));
         readable.push(null);
 
-        await new Promise(resolve => setTimeout(resolve, 20));
+        await finishPromise;
 
         assert.strictEqual(writable.writableEnded, true);
       });
@@ -280,7 +291,7 @@ describe('Stream module (Node.js compat)', () => {
         readable.pipe(writable);
         readable.push(null);
 
-        await new Promise(resolve => queueMicrotask(resolve));
+        await new Promise<void>(resolve => queueMicrotask(() => resolve()));
         assert.strictEqual(pipedSource, readable);
       });
     });
@@ -426,15 +437,11 @@ describe('Stream module (Node.js compat)', () => {
 
       it('should handle empty iterable', async () => {
         const readable = Readable.from([]);
-        let ended = false;
+        const endPromise = waitForEvent(readable, 'end');
 
         readable.on('data', () => {});
-        readable.on('end', () => {
-          ended = true;
-        });
-
-        await new Promise(resolve => setTimeout(resolve, 20));
-        assert.strictEqual(ended, true);
+        await endPromise;
+        assert.strictEqual(readable.readableEnded, true);
       });
 
       it('should be pipeable', async () => {
@@ -456,16 +463,13 @@ describe('Stream module (Node.js compat)', () => {
         }
 
         const readable = Readable.from(errorGenerator());
-        let errorReceived: Error | null = null;
-
-        readable.on('data', () => {});
-        readable.on('error', (err) => {
-          errorReceived = err as Error;
+        const errorPromise = new Promise<Error>(resolve => {
+          readable.once('error', (err) => resolve(err as Error));
         });
 
-        await new Promise(resolve => setTimeout(resolve, 20));
-        expect(errorReceived).not.toBeNull();
-        assert.strictEqual(errorReceived!.message, 'generator error');
+        readable.on('data', () => {});
+        const errorReceived = await errorPromise;
+        assert.strictEqual(errorReceived.message, 'generator error');
       });
 
       it('should be accessible via Stream.from', () => {
@@ -715,11 +719,12 @@ describe('Stream module (Node.js compat)', () => {
       const writable = new Writable();
 
       let callbackCalled = false;
-      pipeline(readable, writable, () => {
-        callbackCalled = true;
+      await new Promise<void>(resolve => {
+        pipeline(readable, writable, () => {
+          callbackCalled = true;
+          resolve();
+        });
       });
-
-      await new Promise(resolve => setTimeout(resolve, 10));
       assert.strictEqual(callbackCalled, true);
     });
 
@@ -737,11 +742,12 @@ describe('Stream module (Node.js compat)', () => {
       const writable = new Writable();
       let callbackCalled = false;
 
-      finished(writable, () => {
-        callbackCalled = true;
+      await new Promise<void>(resolve => {
+        finished(writable, () => {
+          callbackCalled = true;
+          resolve();
+        });
       });
-
-      await new Promise(resolve => setTimeout(resolve, 10));
       assert.strictEqual(callbackCalled, true);
     });
 
@@ -756,6 +762,7 @@ describe('Stream module (Node.js compat)', () => {
     it('should handle readable -> writable pipe with multiple chunks', async () => {
       const readable = new Readable();
       const writable = new Writable();
+      const finishPromise = waitForEvent(writable, 'finish');
 
       readable.pipe(writable);
 
@@ -764,7 +771,7 @@ describe('Stream module (Node.js compat)', () => {
       }
       readable.push(null);
 
-      await new Promise(resolve => setTimeout(resolve, 50));
+      await finishPromise;
 
       const result = writable.getBufferAsString();
       for (let i = 0; i < 10; i++) {
@@ -783,13 +790,15 @@ describe('Stream module (Node.js compat)', () => {
       const readable = new Readable();
       const transform = new ReverseTransform();
       const writable = new Writable();
+      const transformFinishPromise = waitForEvent(transform, 'finish');
 
       readable.pipe(transform).pipe(writable);
 
       readable.push(Buffer.from('hello'));
       readable.push(null);
 
-      await new Promise(resolve => setTimeout(resolve, 50));
+      await transformFinishPromise;
+      await nextMicrotask();
 
       assert.strictEqual(writable.getBufferAsString(), 'olleh');
     });
@@ -797,6 +806,7 @@ describe('Stream module (Node.js compat)', () => {
     it('should handle string input', async () => {
       const readable = new Readable();
       const writable = new Writable();
+      const finishPromise = waitForEvent(writable, 'finish');
 
       readable.pipe(writable);
 
@@ -804,7 +814,7 @@ describe('Stream module (Node.js compat)', () => {
       readable.push(' world');
       readable.push(null);
 
-      await new Promise(resolve => setTimeout(resolve, 20));
+      await finishPromise;
 
       assert.strictEqual(writable.getBufferAsString(), 'hello world');
     });
@@ -824,7 +834,7 @@ describe('Stream module (Node.js compat)', () => {
       readable.push(Buffer.from('first'));
       readable.push(Buffer.from('second'));
 
-      await new Promise(resolve => setTimeout(resolve, 10));
+      await nextMicrotask();
 
       // once should only fire once
       assert.strictEqual(count, 1);
@@ -846,7 +856,7 @@ describe('Stream module (Node.js compat)', () => {
       readable.removeAllListeners('data');
 
       readable.push(Buffer.from('second'));
-      await new Promise(resolve => setTimeout(resolve, 10));
+      await nextMicrotask();
 
       assert.strictEqual(count, 1);
     });

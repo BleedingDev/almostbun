@@ -83,6 +83,31 @@ describe('ServerBridge', () => {
 
   describe('initServiceWorker with mocked navigator', () => {
     const originalNavigator = globalThis.navigator;
+    type GlobalWithOptionalMessageChannel = typeof globalThis & {
+      MessageChannel?: typeof MessageChannel;
+    };
+
+    const withMockMessageChannel = async (run: () => Promise<void>) => {
+      const globalWithMessageChannel = globalThis as GlobalWithOptionalMessageChannel;
+      const originalMessageChannel = globalWithMessageChannel.MessageChannel;
+
+      class MockMessageChannel {
+        port1 = { onmessage: null as ((event: unknown) => void) | null, postMessage: vi.fn() };
+        port2 = {};
+      }
+
+      globalWithMessageChannel.MessageChannel = MockMessageChannel as unknown as typeof MessageChannel;
+
+      try {
+        await run();
+      } finally {
+        if (originalMessageChannel === undefined) {
+          Reflect.deleteProperty(globalThis as Record<string, unknown>, 'MessageChannel');
+        } else {
+          globalWithMessageChannel.MessageChannel = originalMessageChannel;
+        }
+      }
+    };
 
     afterEach(() => {
       // Restore original navigator
@@ -115,26 +140,18 @@ describe('ServerBridge', () => {
         configurable: true,
       });
 
-      // Mock MessageChannel
-      const originalMessageChannel = globalThis.MessageChannel;
-      class MockMessageChannel {
-        port1 = { onmessage: null as MessageEventHandler | null, postMessage: vi.fn() };
-        port2 = {};
-      }
-      globalThis.MessageChannel = MockMessageChannel as any;
+      await withMockMessageChannel(async () => {
+        const bridge = new ServerBridge();
 
-      const bridge = new ServerBridge();
-
-      try {
-        await bridge.initServiceWorker();
-      } catch {
-        // Ignore errors from incomplete mock
-      }
+        try {
+          await bridge.initServiceWorker();
+        } catch {
+          // Ignore errors from incomplete mock
+        }
+      });
 
       expect(mockServiceWorker.register).toHaveBeenCalledWith('/__sw__.js', { scope: '/' });
       expect(registeredUrl).toBe('/__sw__.js');
-
-      globalThis.MessageChannel = originalMessageChannel;
     });
 
     it('should use custom swUrl when specified', async () => {
@@ -159,26 +176,18 @@ describe('ServerBridge', () => {
         configurable: true,
       });
 
-      // Mock MessageChannel
-      const originalMessageChannel = globalThis.MessageChannel;
-      class MockMessageChannel {
-        port1 = { onmessage: null as MessageEventHandler | null, postMessage: vi.fn() };
-        port2 = {};
-      }
-      globalThis.MessageChannel = MockMessageChannel as any;
+      await withMockMessageChannel(async () => {
+        const bridge = new ServerBridge();
 
-      const bridge = new ServerBridge();
-
-      try {
-        await bridge.initServiceWorker({ swUrl: '/custom/path/__sw__.js' });
-      } catch {
-        // Ignore errors from incomplete mock
-      }
+        try {
+          await bridge.initServiceWorker({ swUrl: '/custom/path/__sw__.js' });
+        } catch {
+          // Ignore errors from incomplete mock
+        }
+      });
 
       expect(mockServiceWorker.register).toHaveBeenCalledWith('/custom/path/__sw__.js', { scope: '/' });
       expect(registeredUrl).toBe('/custom/path/__sw__.js');
-
-      globalThis.MessageChannel = originalMessageChannel;
     });
 
     it('should reuse existing active registration when already controlled', async () => {
@@ -211,21 +220,14 @@ describe('ServerBridge', () => {
         configurable: true,
       });
 
-      const originalMessageChannel = globalThis.MessageChannel;
-      class MockMessageChannel {
-        port1 = { onmessage: null as MessageEventHandler | null, postMessage: vi.fn() };
-        port2 = {};
-      }
-      globalThis.MessageChannel = MockMessageChannel as any;
-
-      const bridge = new ServerBridge();
-      await bridge.initServiceWorker();
+      await withMockMessageChannel(async () => {
+        const bridge = new ServerBridge();
+        await bridge.initServiceWorker();
+      });
 
       expect(mockServiceWorker.getRegistration).toHaveBeenCalledWith('/');
       expect(mockServiceWorker.register).not.toHaveBeenCalled();
       expect(update).toHaveBeenCalled();
-
-      globalThis.MessageChannel = originalMessageChannel;
     });
 
     it('should retry registration after unregistering stale registrations', async () => {
@@ -259,15 +261,10 @@ describe('ServerBridge', () => {
         configurable: true,
       });
 
-      const originalMessageChannel = globalThis.MessageChannel;
-      class MockMessageChannel {
-        port1 = { onmessage: null as MessageEventHandler | null, postMessage: vi.fn() };
-        port2 = {};
-      }
-      globalThis.MessageChannel = MockMessageChannel as any;
-
-      const bridge = new ServerBridge();
-      await bridge.initServiceWorker();
+      await withMockMessageChannel(async () => {
+        const bridge = new ServerBridge();
+        await bridge.initServiceWorker();
+      });
 
       expect(mockServiceWorker.register).toHaveBeenCalledTimes(2);
       expect(mockServiceWorker.register).toHaveBeenNthCalledWith(1, '/__sw__.js', { scope: '/' });
@@ -278,8 +275,6 @@ describe('ServerBridge', () => {
       );
       expect(mockServiceWorker.getRegistrations).toHaveBeenCalledTimes(1);
       expect(staleUnregister).toHaveBeenCalledTimes(1);
-
-      globalThis.MessageChannel = originalMessageChannel;
     });
 
     it('should fall back to /almostbun-sw.js when __sw__.js retries keep failing', async () => {
@@ -314,15 +309,10 @@ describe('ServerBridge', () => {
         configurable: true,
       });
 
-      const originalMessageChannel = globalThis.MessageChannel;
-      class MockMessageChannel {
-        port1 = { onmessage: null as MessageEventHandler | null, postMessage: vi.fn() };
-        port2 = {};
-      }
-      globalThis.MessageChannel = MockMessageChannel as any;
-
-      const bridge = new ServerBridge();
-      await bridge.initServiceWorker();
+      await withMockMessageChannel(async () => {
+        const bridge = new ServerBridge();
+        await bridge.initServiceWorker();
+      });
 
       expect(mockServiceWorker.register).toHaveBeenCalledTimes(3);
       expect(mockServiceWorker.register).toHaveBeenNthCalledWith(1, '/__sw__.js', { scope: '/' });
@@ -337,8 +327,6 @@ describe('ServerBridge', () => {
         { scope: '/' }
       );
       expect(staleUnregister).toHaveBeenCalledTimes(1);
-
-      globalThis.MessageChannel = originalMessageChannel;
     });
   });
 

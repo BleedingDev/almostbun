@@ -119,11 +119,12 @@ const ensurePatched = (): void => {
       };
     };
 
-    return originalPromiseThen.call(
+    const nextPromise = originalPromiseThen.call(
       this,
       wrap(onfulfilled) as ((value: unknown) => TResult1 | PromiseLike<TResult1>) | undefined,
       wrap(onrejected) as ((reason: unknown) => TResult2 | PromiseLike<TResult2>) | undefined
     );
+    return nextPromise as Promise<TResult1 | TResult2>;
   };
 
   globalThis.setTimeout = ((handler: TimerHandler, timeout?: number, ...args: unknown[]) => {

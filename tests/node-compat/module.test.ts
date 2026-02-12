@@ -95,13 +95,23 @@ describe('module module (Node.js compat)', () => {
 
   describe('Module export object', () => {
     it('should expose same APIs as named exports', () => {
-      expect(Module.createRequire).toBe(createRequire);
-      expect(Module.builtinModules).toBe(builtinModules);
-      expect(Module.isBuiltin).toBe(isBuiltin);
-      expect(Module._cache).toBe(_cache);
-      expect(Module._extensions).toBe(_extensions);
-      expect(Module._pathCache).toBe(_pathCache);
-      expect(Module.syncBuiltinESMExports).toBe(syncBuiltinESMExports);
+      const moduleExport = Module as unknown as {
+        createRequire: typeof createRequire;
+        builtinModules: typeof builtinModules;
+        isBuiltin: typeof isBuiltin;
+        _cache: typeof _cache;
+        _extensions: typeof _extensions;
+        _pathCache: typeof _pathCache;
+        syncBuiltinESMExports: typeof syncBuiltinESMExports;
+      };
+
+      expect(moduleExport.createRequire).toBe(createRequire);
+      expect(moduleExport.builtinModules).toBe(builtinModules);
+      expect(moduleExport.isBuiltin).toBe(isBuiltin);
+      expect(moduleExport._cache).toBe(_cache);
+      expect(moduleExport._extensions).toBe(_extensions);
+      expect(moduleExport._pathCache).toBe(_pathCache);
+      expect(moduleExport.syncBuiltinESMExports).toBe(syncBuiltinESMExports);
     });
 
     it('default export should match Module object', () => {

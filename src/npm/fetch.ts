@@ -215,6 +215,12 @@ function base64ToBytes(base64: string): Uint8Array {
   return bytes;
 }
 
+function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
+  const copy = new Uint8Array(bytes.byteLength);
+  copy.set(bytes);
+  return copy.buffer;
+}
+
 function computeCacheNamespace(cache: FetchResponseCacheOptions): string {
   const namespace = cache.namespace || 'http';
   return `http-responses:${namespace}`;
@@ -315,7 +321,8 @@ function deserializeCachedResponse(
     }
 
     const bodyBytes = payload.bodyBase64 ? base64ToBytes(payload.bodyBase64) : new Uint8Array(0);
-    const response = new Response(bodyBytes.byteLength > 0 ? bodyBytes : null, {
+    const responseBody = bodyBytes.byteLength > 0 ? toArrayBuffer(bodyBytes) : null;
+    const response = new Response(responseBody, {
       status,
       statusText: payload.statusText || '',
       headers: payload.headers || {},
@@ -407,11 +414,16 @@ async function cacheHttpResponse(
     return;
   }
 
+  const serializedHeaders: Record<string, string> = {};
+  cloned.headers.forEach((value, key) => {
+    serializedHeaders[key] = value;
+  });
+
   const serializedPayload: CachedHttpResponsePayload = {
     storedAt: Date.now(),
     status: cloned.status,
     statusText: cloned.statusText,
-    headers: Object.fromEntries(cloned.headers.entries()),
+    headers: serializedHeaders,
     bodyBase64: bytesToBase64(body),
   };
 

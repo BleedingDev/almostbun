@@ -185,7 +185,7 @@ function normalizeEncoding(
     // runtime breakage for config/package readers in browser-only execution.
     return 'utf8';
   }
-  return undefined;
+  return null;
 }
 
 /**

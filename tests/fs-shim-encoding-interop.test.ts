@@ -38,8 +38,28 @@ describe('fs shim encoding interop', () => {
     vfs.writeFileSync('/project/package.json', '{"name":"demo"}');
     const fs = createFsShim(vfs);
 
-    const value = fs.readFileSync('/project/package.json', {} as { encoding?: string });
+    const value = fs.readFileSync('/project/package.json', {} as { encoding?: null });
     expect(value).toBe('{"name":"demo"}');
+  });
+
+  it('returns binary data when encoding is explicitly null', () => {
+    const vfs = new VirtualFS();
+    vfs.writeFileSync('/project/data.bin', new Uint8Array([0, 1, 2, 255]));
+    const fs = createFsShim(vfs);
+
+    const value = fs.readFileSync('/project/data.bin', { encoding: null });
+    expect(value).toBeInstanceOf(Uint8Array);
+    expect(Array.from(value as Uint8Array)).toEqual([0, 1, 2, 255]);
+  });
+
+  it('returns binary data when no encoding is provided', () => {
+    const vfs = new VirtualFS();
+    vfs.writeFileSync('/project/data.bin', new Uint8Array([10, 20, 30]));
+    const fs = createFsShim(vfs);
+
+    const value = fs.readFileSync('/project/data.bin');
+    expect(value).toBeInstanceOf(Uint8Array);
+    expect(Array.from(value as Uint8Array)).toEqual([10, 20, 30]);
   });
 
   it('supports callback-style fs.writeFile used by fs-extra wrappers', async () => {

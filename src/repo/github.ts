@@ -701,7 +701,7 @@ export async function importGitHubRepo(
   } else if (isBrowserRuntime()) {
     extractedFiles = await importGitHubRepoViaApi(vfs, repo, destPath, options);
   } else {
-    throw new Error(`Failed to download GitHub archive: ${response.status}`);
+    throw new Error(`Failed to download GitHub archive: ${response?.status ?? 'unknown'}`);
   }
 
   if (repo.subdir && !vfs.existsSync(projectPath)) {
