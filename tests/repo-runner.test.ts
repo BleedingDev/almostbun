@@ -34,6 +34,58 @@ describe('repo runner detection', () => {
     expect(detected.projectPath).toBe('/project');
   });
 
+  it('detects Next.js app when routes are under src/app', () => {
+    const vfs = new VirtualFS();
+    vfs.mkdirSync('/project/src/app', { recursive: true });
+    vfs.writeFileSync('/project/src/app/layout.tsx', 'export default function Layout({ children }) { return children; }');
+    vfs.writeFileSync('/project/src/app/page.tsx', 'export default function Page(){ return null; }');
+    vfs.writeFileSync(
+      '/project/package.json',
+      JSON.stringify({
+        name: 'next-src-app',
+        dependencies: { next: '^14.2.0' },
+      })
+    );
+
+    const detected = detectRunnableProject(vfs, { projectPath: '/project' });
+    expect(detected.kind).toBe('next');
+    expect(detected.projectPath).toBe('/project');
+  });
+
+  it('prefers nested Next.js workspace with a root route when multiple siblings exist', () => {
+    const vfs = new VirtualFS();
+    vfs.writeFileSync('/repo/examples/with-zones/package.json', JSON.stringify({ private: true }));
+
+    vfs.mkdirSync('/repo/examples/with-zones/blog/app/blog', { recursive: true });
+    vfs.writeFileSync(
+      '/repo/examples/with-zones/blog/package.json',
+      JSON.stringify({
+        name: 'blog',
+        scripts: { dev: 'next dev -p 4000' },
+        dependencies: { next: 'latest' },
+      })
+    );
+    vfs.writeFileSync('/repo/examples/with-zones/blog/app/blog/page.tsx', 'export default function Blog(){ return null; }');
+
+    vfs.mkdirSync('/repo/examples/with-zones/home/app', { recursive: true });
+    vfs.writeFileSync(
+      '/repo/examples/with-zones/home/package.json',
+      JSON.stringify({
+        name: 'home',
+        scripts: { dev: 'next dev' },
+        dependencies: { next: 'latest' },
+      })
+    );
+    vfs.writeFileSync('/repo/examples/with-zones/home/app/page.tsx', 'export default function Home(){ return null; }');
+
+    const detected = detectRunnableProject(vfs, {
+      projectPath: '/repo/examples/with-zones',
+    });
+
+    expect(detected.kind).toBe('next');
+    expect(detected.projectPath).toBe('/repo/examples/with-zones/home');
+  });
+
   it('detects Vite app', () => {
     const vfs = new VirtualFS();
     vfs.writeFileSync('/project/index.html', '<!doctype html>');
@@ -360,6 +412,49 @@ describe('repo runner startDetectedProject', () => {
 
     expect(response.statusCode).toBe(200);
     expect(response.body.toString()).toContain('Static Works');
+
+    running.stop();
+  });
+
+  it('starts Next.js app from src/app directory', async () => {
+    const vfs = new VirtualFS();
+    vfs.mkdirSync('/project/src/app', { recursive: true });
+    vfs.writeFileSync(
+      '/project/package.json',
+      JSON.stringify({
+        name: 'next-src-app',
+        dependencies: { next: '^14.2.0' },
+      })
+    );
+    vfs.writeFileSync(
+      '/project/src/app/layout.tsx',
+      'export default function Layout({ children }) { return <html><body>{children}</body></html>; }'
+    );
+    vfs.writeFileSync(
+      '/project/src/app/page.tsx',
+      'export default function Page() { return <main>Src App Works</main>; }'
+    );
+
+    const detected = detectRunnableProject(vfs, { projectPath: '/project' });
+    const running = await startDetectedProject(vfs, detected, {
+      initServiceWorker: false,
+      port: 4092,
+    });
+
+    const bridge = getServerBridge();
+    const response = await bridge.handleRequest(
+      running.port,
+      'GET',
+      '/',
+      {
+        host: 'localhost',
+      }
+    );
+
+    expect(response.statusCode).toBe(200);
+    const body = response.body.toString();
+    expect(body).toContain('<div id="__next"></div>');
+    expect(body).not.toContain('404 - Page Not Found');
 
     running.stop();
   });

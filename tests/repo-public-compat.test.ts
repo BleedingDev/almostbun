@@ -595,6 +595,13 @@ const PUBLIC_REPO_MATRIX: RepoMatrixCase[] = [
     crawlLinksLimit: 0,
   },
   {
+    name: 'nextjs-with-apollo',
+    url: 'https://github.com/vercel/next.js/tree/canary/examples/with-apollo',
+    expectedKind: 'next',
+    skipInstall: true,
+    crawlLinksLimit: 0,
+  },
+  {
     name: 'nextjs-with-apivideo',
     url: 'https://github.com/vercel/next.js/tree/canary/examples/with-apivideo',
     expectedKind: 'next',
@@ -604,6 +611,13 @@ const PUBLIC_REPO_MATRIX: RepoMatrixCase[] = [
   {
     name: 'nextjs-with-axiom',
     url: 'https://github.com/vercel/next.js/tree/canary/examples/with-axiom',
+    expectedKind: 'next',
+    skipInstall: true,
+    crawlLinksLimit: 0,
+  },
+  {
+    name: 'nextjs-with-chakra-ui',
+    url: 'https://github.com/vercel/next.js/tree/canary/examples/with-chakra-ui',
     expectedKind: 'next',
     skipInstall: true,
     crawlLinksLimit: 0,
@@ -660,6 +674,13 @@ const PUBLIC_REPO_MATRIX: RepoMatrixCase[] = [
   {
     name: 'nextjs-with-google-tag-manager',
     url: 'https://github.com/vercel/next.js/tree/canary/examples/with-google-tag-manager',
+    expectedKind: 'next',
+    skipInstall: true,
+    crawlLinksLimit: 0,
+  },
+  {
+    name: 'nextjs-with-graphql-hooks',
+    url: 'https://github.com/vercel/next.js/tree/canary/examples/with-graphql-hooks',
     expectedKind: 'next',
     skipInstall: true,
     crawlLinksLimit: 0,
@@ -877,6 +898,20 @@ const PUBLIC_REPO_MATRIX: RepoMatrixCase[] = [
   {
     name: 'nextjs-with-yoga',
     url: 'https://github.com/vercel/next.js/tree/canary/examples/with-yoga',
+    expectedKind: 'next',
+    skipInstall: true,
+    crawlLinksLimit: 0,
+  },
+  {
+    name: 'nextjs-with-zones',
+    url: 'https://github.com/vercel/next.js/tree/canary/examples/with-zones',
+    expectedKind: 'next',
+    skipInstall: true,
+    crawlLinksLimit: 0,
+  },
+  {
+    name: 'nextjs-with-zustand',
+    url: 'https://github.com/vercel/next.js/tree/canary/examples/with-zustand',
     expectedKind: 'next',
     skipInstall: true,
     crawlLinksLimit: 0,

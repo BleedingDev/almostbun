@@ -70,11 +70,16 @@ describe('hasAppRouter', () => {
     expect(hasAppRouter('/app', ctx)).toBe(false);
   });
 
-  it('returns false when app dir has only subdirectories', () => {
+  it('returns true when app dir has nested page routes', () => {
     vfs.mkdirSync('/app/about', { recursive: true });
     vfs.writeFileSync('/app/about/page.tsx', 'export default function About() {}');
-    // No root page or layout
-    expect(hasAppRouter('/app', ctx)).toBe(false);
+    expect(hasAppRouter('/app', ctx)).toBe(true);
+  });
+
+  it('returns true when app dir has only nested route handlers', () => {
+    vfs.mkdirSync('/app/api/health', { recursive: true });
+    vfs.writeFileSync('/app/api/health/route.ts', 'export async function GET() { return new Response(\"ok\"); }');
+    expect(hasAppRouter('/app', ctx)).toBe(true);
   });
 });
 

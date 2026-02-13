@@ -168,6 +168,9 @@ interface ModernJsSiblingDistProject {
 const SCRIPT_PRIORITY = ['bun', 'dev', 'start', 'serve', 'preview'] as const;
 const SCRIPT_ENTRY_FALLBACKS = ['server', 'server.ts', 'server.js', 'index', 'index.ts', 'index.js', 'app.ts', 'app.js'];
 const SCRIPT_EXTENSIONS = ['', '.ts', '.tsx', '.mts', '.cts', '.js', '.mjs', '.cjs', '.jsx'];
+const NEXT_PAGE_EXTENSIONS = ['.jsx', '.tsx', '.js', '.ts'] as const;
+const NEXT_PAGES_DIR_CANDIDATES = ['pages', 'src/pages'] as const;
+const NEXT_APP_DIR_CANDIDATES = ['app', 'src/app'] as const;
 const MODERN_CONFIG_CANDIDATES = [
   'modern.config.ts',
   'modern.config.mts',
@@ -303,6 +306,117 @@ function hasModernJsDistOutput(vfs: VirtualFS, projectPath: string): boolean {
     hasPath(vfs, path.posix.join(projectPath, 'dist/api')) ||
     hasPath(vfs, path.posix.join(projectPath, 'dist/html'))
   );
+}
+
+function hasDirectory(vfs: VirtualFS, dirPath: string): boolean {
+  try {
+    return vfs.statSync(dirPath).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+function resolveExistingDirectory(
+  vfs: VirtualFS,
+  projectPath: string,
+  candidates: readonly string[]
+): string | null {
+  for (const relative of candidates) {
+    const fullPath = path.posix.join(projectPath, relative);
+    if (hasDirectory(vfs, fullPath)) {
+      return fullPath;
+    }
+  }
+  return null;
+}
+
+function hasNextSourceDirectories(vfs: VirtualFS, projectPath: string): boolean {
+  return Boolean(
+    resolveExistingDirectory(vfs, projectPath, NEXT_PAGES_DIR_CANDIDATES) ||
+      resolveExistingDirectory(vfs, projectPath, NEXT_APP_DIR_CANDIDATES)
+  );
+}
+
+function hasRootPageRouteInPagesDir(vfs: VirtualFS, pagesDir: string): boolean {
+  for (const ext of NEXT_PAGE_EXTENSIONS) {
+    if (hasPath(vfs, `${pagesDir}/index${ext}`)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function hasRootPageRouteInAppDir(vfs: VirtualFS, appDir: string): boolean {
+  for (const ext of NEXT_PAGE_EXTENSIONS) {
+    if (hasPath(vfs, `${appDir}/page${ext}`)) {
+      return true;
+    }
+  }
+
+  let entries: string[] = [];
+  try {
+    entries = vfs.readdirSync(appDir);
+  } catch {
+    return false;
+  }
+  for (const entry of entries) {
+    if (!/^\([^)]+\)$/.test(entry)) {
+      continue;
+    }
+    const groupDir = `${appDir}/${entry}`;
+    if (!hasDirectory(vfs, groupDir)) {
+      continue;
+    }
+    for (const ext of NEXT_PAGE_EXTENSIONS) {
+      if (hasPath(vfs, `${groupDir}/page${ext}`)) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
+function hasNextRootPageRoute(vfs: VirtualFS, projectPath: string): boolean {
+  for (const relative of NEXT_PAGES_DIR_CANDIDATES) {
+    const pagesDir = path.posix.join(projectPath, relative);
+    if (hasDirectory(vfs, pagesDir) && hasRootPageRouteInPagesDir(vfs, pagesDir)) {
+      return true;
+    }
+  }
+
+  for (const relative of NEXT_APP_DIR_CANDIDATES) {
+    const appDir = path.posix.join(projectPath, relative);
+    if (hasDirectory(vfs, appDir) && hasRootPageRouteInAppDir(vfs, appDir)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function projectKindRank(kind: RunnableProjectKind): number {
+  if (kind === 'modernjs-dist') return 5;
+  if (kind === 'next') return 4;
+  if (kind === 'vite') return 3;
+  if (kind === 'node-script') return 2;
+  return 1;
+}
+
+function detectedProjectScore(vfs: VirtualFS, detected: DetectedRunnableProject): number {
+  let score = projectKindRank(detected.kind) * 1000;
+  score -= detected.projectPath.split('/').filter(Boolean).length;
+
+  if (detected.kind === 'next') {
+    if (hasNextSourceDirectories(vfs, detected.projectPath)) {
+      score += 50;
+    }
+    if (hasNextRootPageRoute(vfs, detected.projectPath)) {
+      score += 200;
+    }
+  }
+
+  return score;
 }
 
 function parseModernJsServerPortFromConfig(vfs: VirtualFS, projectPath: string): number | null {
@@ -948,7 +1062,7 @@ function detectInProjectRoot(vfs: VirtualFS, projectPath: string): DetectedRunna
     };
   }
 
-  const hasNextDirs = hasPath(vfs, path.posix.join(projectPath, 'pages')) || hasPath(vfs, path.posix.join(projectPath, 'app'));
+  const hasNextDirs = hasNextSourceDirectories(vfs, projectPath);
   const hasNextDep = deps.has('next');
   const hasNextScript = /\bnext(?:\s|$)/.test(scripts);
 
@@ -1198,25 +1312,19 @@ export function detectRunnableProject(
     .filter(candidate => candidate !== projectPath);
 
   let firstDetected: DetectedRunnableProject | null = null;
+  let firstScore = Number.NEGATIVE_INFINITY;
   for (const candidate of candidateRoots) {
     const detected = detectInProjectRoot(vfs, candidate);
     if (!detected) continue;
+    const score = detectedProjectScore(vfs, detected);
     if (!firstDetected) {
       firstDetected = detected;
+      firstScore = score;
       continue;
     }
-
-    // Prefer framework-specific servers over generic/static detections.
-    const rank = (kind: RunnableProjectKind): number => {
-      if (kind === 'modernjs-dist') return 5;
-      if (kind === 'next') return 4;
-      if (kind === 'vite') return 3;
-      if (kind === 'node-script') return 2;
-      return 1;
-    };
-
-    if (rank(detected.kind) > rank(firstDetected.kind)) {
+    if (score > firstScore) {
       firstDetected = detected;
+      firstScore = score;
     }
   }
 
@@ -1432,11 +1540,15 @@ export async function startDetectedProject(
       apiProxyPort,
     });
   } else if (detected.kind === 'next') {
+    const pagesDir = resolveExistingDirectory(vfs, detected.projectPath, NEXT_PAGES_DIR_CANDIDATES)
+      || path.posix.join(detected.projectPath, 'pages');
+    const appDir = resolveExistingDirectory(vfs, detected.projectPath, NEXT_APP_DIR_CANDIDATES)
+      || path.posix.join(detected.projectPath, 'app');
     server = new NextDevServer(vfs, {
       port: selectedPort,
       root: detected.projectPath,
-      pagesDir: path.posix.join(detected.projectPath, 'pages'),
-      appDir: path.posix.join(detected.projectPath, 'app'),
+      pagesDir,
+      appDir,
       publicDir: path.posix.join(detected.projectPath, 'public'),
       env: options.env,
     });

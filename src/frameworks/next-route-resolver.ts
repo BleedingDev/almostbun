@@ -41,9 +41,46 @@ export function hasAppRouter(appDir: string, ctx: RouteResolverContext): boolean
       }
     } catch { /* ignore */ }
 
-    // Also check for any layout.tsx which indicates App Router usage
+    // Also check for any root layout.tsx which indicates App Router usage
     for (const ext of PAGE_EXTENSIONS) {
       if (ctx.exists(`${appDir}/layout${ext}`)) return true;
+    }
+
+    // Fallback: detect nested App Router conventions even without root page/layout.
+    // Some apps intentionally only expose nested routes (e.g. /blog/page.tsx).
+    const maxDepth = 8;
+    const queue: Array<{ dir: string; depth: number }> = [{ dir: appDir, depth: 0 }];
+    const visited = new Set<string>();
+
+    while (queue.length > 0) {
+      const current = queue.shift()!;
+      if (visited.has(current.dir)) continue;
+      visited.add(current.dir);
+
+      let entries: string[] = [];
+      try {
+        entries = ctx.readdir(current.dir);
+      } catch {
+        continue;
+      }
+
+      for (const entry of entries) {
+        const fullPath = `${current.dir}/${entry}`;
+        if (ctx.isDirectory(fullPath)) {
+          if (current.depth < maxDepth) {
+            queue.push({ dir: fullPath, depth: current.depth + 1 });
+          }
+          continue;
+        }
+
+        if (
+          /^page\.(jsx|tsx|js|ts)$/.test(entry) ||
+          /^layout\.(jsx|tsx|js|ts)$/.test(entry) ||
+          /^route\.(jsx|tsx|js|ts)$/.test(entry)
+        ) {
+          return true;
+        }
+      }
     }
 
     return false;
