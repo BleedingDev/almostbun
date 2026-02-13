@@ -114,6 +114,7 @@ export class VirtualFSAdapter implements IFileSystem {
     const stats = this.vfs.statSync(path);
     const isFile = stats.isFile();
     const isDirectory = stats.isDirectory();
+    const isSymbolicLink = stats.isSymbolicLink();
 
     let size = 0;
     if (isFile) {
@@ -128,8 +129,8 @@ export class VirtualFSAdapter implements IFileSystem {
     return {
       isFile,
       isDirectory,
-      isSymbolicLink: false,
-      mode: isDirectory ? 0o755 : 0o644,
+      isSymbolicLink,
+      mode: isDirectory ? 0o755 : isSymbolicLink ? 0o777 : 0o644,
       size,
       mtime: new Date(),
     };
@@ -159,12 +160,12 @@ export class VirtualFSAdapter implements IFileSystem {
     for (const name of entries) {
       const fullPath = path === '/' ? `/${name}` : `${path}/${name}`;
       try {
-        const stats = this.vfs.statSync(fullPath);
+        const stats = this.vfs.lstatSync(fullPath);
         result.push({
           name,
           isFile: stats.isFile(),
           isDirectory: stats.isDirectory(),
-          isSymbolicLink: false,
+          isSymbolicLink: stats.isSymbolicLink(),
         });
       } catch {
         // Entry disappeared between readdir and stat, skip it
@@ -187,9 +188,11 @@ export class VirtualFSAdapter implements IFileSystem {
       throw createNodeError('ENOENT', 'rm', path);
     }
 
-    const stats = this.vfs.statSync(path);
+    const stats = this.vfs.lstatSync(path);
 
     if (stats.isFile()) {
+      this.vfs.unlinkSync(path);
+    } else if (stats.isSymbolicLink()) {
       this.vfs.unlinkSync(path);
     } else if (stats.isDirectory()) {
       if (options?.recursive) {
@@ -208,7 +211,7 @@ export class VirtualFSAdapter implements IFileSystem {
 
     for (const entry of entries) {
       const fullPath = path === '/' ? `/${entry}` : `${path}/${entry}`;
-      const stats = this.vfs.statSync(fullPath);
+      const stats = this.vfs.lstatSync(fullPath);
 
       if (stats.isDirectory()) {
         await this.rmRecursive(fullPath);
@@ -224,11 +227,13 @@ export class VirtualFSAdapter implements IFileSystem {
    * Copy a file or directory
    */
   async cp(src: string, dest: string, options?: CpOptions): Promise<void> {
-    const stats = this.vfs.statSync(src);
+    const stats = this.vfs.lstatSync(src);
 
     if (stats.isFile()) {
       const content = this.vfs.readFileSync(src);
       this.vfs.writeFileSync(dest, content);
+    } else if (stats.isSymbolicLink()) {
+      this.vfs.symlinkSync(this.vfs.readlinkSync(src), dest);
     } else if (stats.isDirectory()) {
       if (!options?.recursive) {
         throw new Error(
@@ -251,10 +256,12 @@ export class VirtualFSAdapter implements IFileSystem {
     for (const entry of entries) {
       const srcPath = src === '/' ? `/${entry}` : `${src}/${entry}`;
       const destPath = dest === '/' ? `/${entry}` : `${dest}/${entry}`;
-      const stats = this.vfs.statSync(srcPath);
+      const stats = this.vfs.lstatSync(srcPath);
 
       if (stats.isDirectory()) {
         await this.cpRecursive(srcPath, destPath);
+      } else if (stats.isSymbolicLink()) {
+        this.vfs.symlinkSync(this.vfs.readlinkSync(srcPath), destPath);
       } else {
         const content = this.vfs.readFileSync(srcPath);
         this.vfs.writeFileSync(destPath, content);
@@ -352,10 +359,10 @@ export class VirtualFSAdapter implements IFileSystem {
   }
 
   /**
-   * Create a symbolic link (not supported)
+   * Create a symbolic link
    */
-  async symlink(_target: string, _linkPath: string): Promise<void> {
-    throw new Error('Symbolic links are not supported in VirtualFS');
+  async symlink(target: string, linkPath: string): Promise<void> {
+    this.vfs.symlinkSync(target, linkPath);
   }
 
   /**
@@ -366,30 +373,52 @@ export class VirtualFSAdapter implements IFileSystem {
   }
 
   /**
-   * Read the target of a symbolic link (not supported)
+   * Read the target of a symbolic link
    */
-  async readlink(_path: string): Promise<string> {
-    throw new Error('Symbolic links are not supported in VirtualFS');
+  async readlink(path: string): Promise<string> {
+    return this.vfs.readlinkSync(path);
   }
 
   /**
    * Get file/directory information without following symlinks
-   * Since VFS doesn't support symlinks, this is the same as stat
    */
   async lstat(path: string): Promise<FsStat> {
-    return this.stat(path);
+    const stats = this.vfs.lstatSync(path);
+    const isFile = stats.isFile();
+    const isDirectory = stats.isDirectory();
+    const isSymbolicLink = stats.isSymbolicLink();
+    let size = 0;
+
+    if (isFile) {
+      try {
+        const content = this.vfs.readFileSync(path);
+        size = content.length;
+      } catch {
+        // Ignore read errors and keep default size.
+      }
+    } else if (isSymbolicLink) {
+      try {
+        size = this.vfs.readlinkSync(path).length;
+      } catch {
+        // Ignore readlink errors and keep default size.
+      }
+    }
+
+    return {
+      isFile,
+      isDirectory,
+      isSymbolicLink,
+      mode: isDirectory ? 0o755 : isSymbolicLink ? 0o777 : 0o644,
+      size,
+      mtime: new Date(),
+    };
   }
 
   /**
    * Resolve all symlinks in a path
-   * Since VFS doesn't support symlinks, just normalize and return
    */
   async realpath(path: string): Promise<string> {
-    // Verify path exists
-    if (!this.vfs.existsSync(path)) {
-      throw createNodeError('ENOENT', 'realpath', path);
-    }
-    return this.normalizePath(path);
+    return this.vfs.realpathSync(path);
   }
 
   /**

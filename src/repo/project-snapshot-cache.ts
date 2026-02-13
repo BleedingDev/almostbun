@@ -332,6 +332,19 @@ function hydrateVfsFromSnapshot(vfs: VirtualFS, snapshot: VFSSnapshot): void {
       continue;
     }
 
+    if (entry.type === 'symlink') {
+      const parentPath = entry.path.slice(0, entry.path.lastIndexOf('/')) || '/';
+      if (parentPath !== '/' && !vfs.existsSync(parentPath)) {
+        vfs.mkdirSync(parentPath, { recursive: true });
+      }
+      try {
+        vfs.symlinkSync(entry.target || '', entry.path);
+      } catch {
+        // ignore
+      }
+      continue;
+    }
+
     const parentPath = entry.path.slice(0, entry.path.lastIndexOf('/')) || '/';
     if (parentPath !== '/' && !vfs.existsSync(parentPath)) {
       vfs.mkdirSync(parentPath, { recursive: true });

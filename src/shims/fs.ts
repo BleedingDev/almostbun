@@ -27,6 +27,8 @@ export interface FsShim {
   readdirSync(path: PathLike, options?: { withFileTypes?: boolean; encoding?: string } | string): string[] | Dirent[];
   statSync(path: PathLike): Stats;
   lstatSync(path: PathLike): Stats;
+  symlinkSync(target: PathLike, path: PathLike): void;
+  readlinkSync(path: PathLike): string;
   fstatSync(fd: number): Stats;
   unlinkSync(path: PathLike): void;
   rmdirSync(path: PathLike): void;
@@ -57,6 +59,8 @@ export interface FsShim {
   ): void;
   stat(path: string, callback: (err: Error | null, stats?: Stats) => void): void;
   lstat(path: string, callback: (err: Error | null, stats?: Stats) => void): void;
+  symlink(target: string, path: string, callback: (err: Error | null) => void): void;
+  readlink(path: string, callback: (err: Error | null, target?: string) => void): void;
   readdir(path: string, callback: (err: Error | null, files?: string[]) => void): void;
   realpath(path: string, callback: (err: Error | null, resolvedPath?: string) => void): void;
   access(path: string, callback: (err: Error | null) => void): void;
@@ -74,6 +78,8 @@ export interface FsPromises {
   writeFile(path: PathLike, data: string | Uint8Array): Promise<void>;
   stat(path: PathLike): Promise<Stats>;
   lstat(path: PathLike): Promise<Stats>;
+  symlink(target: PathLike, path: PathLike): Promise<void>;
+  readlink(path: PathLike): Promise<string>;
   readdir(path: PathLike): Promise<string[]>;
   mkdir(path: PathLike, options?: { recursive?: boolean }): Promise<void>;
   unlink(path: PathLike): Promise<void>;
@@ -98,11 +104,13 @@ export class Dirent {
   name: string;
   private _isDirectory: boolean;
   private _isFile: boolean;
+  private _isSymbolicLink: boolean;
 
-  constructor(name: string, isDirectory: boolean, isFile: boolean) {
+  constructor(name: string, isDirectory: boolean, isFile: boolean, isSymbolicLink: boolean = false) {
     this.name = name;
     this._isDirectory = isDirectory;
     this._isFile = isFile;
+    this._isSymbolicLink = isSymbolicLink;
   }
 
   isDirectory(): boolean {
@@ -130,7 +138,7 @@ export class Dirent {
   }
 
   isSymbolicLink(): boolean {
-    return false;
+    return this._isSymbolicLink;
   }
 }
 
@@ -350,18 +358,42 @@ export function createFsShim(vfs: VirtualFS, getCwd?: () => string): FsShim {
         }
       });
     },
-    stat(pathLike: string | unknown): Promise<Stats> {
+    stat(pathLike: unknown): Promise<Stats> {
       return new Promise((resolve, reject) => {
         try {
-          const path = typeof pathLike === 'string' ? pathLike : resolvePath(pathLike);
-          resolve(vfs.statSync(path));
+          resolve(vfs.statSync(resolvePath(pathLike)));
         } catch (err) {
           reject(err);
         }
       });
     },
     lstat(pathLike: unknown): Promise<Stats> {
-      return this.stat(resolvePath(pathLike));
+      return new Promise((resolve, reject) => {
+        try {
+          resolve(vfs.lstatSync(resolvePath(pathLike)));
+        } catch (err) {
+          reject(err);
+        }
+      });
+    },
+    symlink(targetLike: unknown, pathLike: unknown): Promise<void> {
+      return new Promise((resolve, reject) => {
+        try {
+          vfs.symlinkSync(String(targetLike), resolvePath(pathLike));
+          resolve();
+        } catch (err) {
+          reject(err);
+        }
+      });
+    },
+    readlink(pathLike: unknown): Promise<string> {
+      return new Promise((resolve, reject) => {
+        try {
+          resolve(vfs.readlinkSync(resolvePath(pathLike)));
+        } catch (err) {
+          reject(err);
+        }
+      });
     },
     readdir(pathLike: unknown): Promise<string[]> {
       return new Promise((resolve, reject) => {
@@ -392,49 +424,49 @@ export function createFsShim(vfs: VirtualFS, getCwd?: () => string): FsShim {
         }
       });
     },
-    rmdir(path: string): Promise<void> {
+    rmdir(pathLike: unknown): Promise<void> {
       return new Promise((resolve, reject) => {
         try {
-          vfs.rmdirSync(path);
+          vfs.rmdirSync(resolvePath(pathLike));
           resolve();
         } catch (err) {
           reject(err);
         }
       });
     },
-    rename(oldPath: string, newPath: string): Promise<void> {
+    rename(oldPathLike: unknown, newPathLike: unknown): Promise<void> {
       return new Promise((resolve, reject) => {
         try {
-          vfs.renameSync(oldPath, newPath);
+          vfs.renameSync(resolvePath(oldPathLike), resolvePath(newPathLike));
           resolve();
         } catch (err) {
           reject(err);
         }
       });
     },
-    access(path: string, mode?: number): Promise<void> {
+    access(pathLike: unknown, mode?: number): Promise<void> {
       return new Promise((resolve, reject) => {
         try {
-          vfs.accessSync(path, mode);
+          vfs.accessSync(resolvePath(pathLike), mode);
           resolve();
         } catch (err) {
           reject(err);
         }
       });
     },
-    realpath(path: string): Promise<string> {
+    realpath(pathLike: unknown): Promise<string> {
       return new Promise((resolve, reject) => {
         try {
-          resolve(vfs.realpathSync(path));
+          resolve(vfs.realpathSync(resolvePath(pathLike)));
         } catch (err) {
           reject(err);
         }
       });
     },
-    copyFile(src: string, dest: string): Promise<void> {
+    copyFile(srcLike: unknown, destLike: unknown): Promise<void> {
       return new Promise((resolve, reject) => {
         try {
-          vfs.copyFileSync(src, dest);
+          vfs.copyFileSync(resolvePath(srcLike), resolvePath(destLike));
           resolve();
         } catch (err) {
           reject(err);
@@ -510,14 +542,16 @@ export function createFsShim(vfs: VirtualFS, getCwd?: () => string): FsShim {
           const entryPath = path.endsWith('/') ? path + name : path + '/' + name;
           let isDir = false;
           let isFile = false;
+          let isSymbolicLink = false;
           try {
-            const stat = vfs.statSync(entryPath);
+            const stat = vfs.lstatSync(entryPath);
             isDir = stat.isDirectory();
             isFile = stat.isFile();
+            isSymbolicLink = stat.isSymbolicLink();
           } catch {
             isFile = true; // Default to file if stat fails
           }
-          return new Dirent(name, isDir, isFile);
+          return new Dirent(name, isDir, isFile, isSymbolicLink);
         });
         // Debug: Log readdirSync results for _generated
         if (path.includes('_generated')) {
@@ -548,6 +582,14 @@ export function createFsShim(vfs: VirtualFS, getCwd?: () => string): FsShim {
 
     lstatSync(pathLike: unknown): Stats {
       return vfs.lstatSync(resolvePath(pathLike));
+    },
+
+    symlinkSync(targetLike: unknown, pathLike: unknown): void {
+      vfs.symlinkSync(String(targetLike), resolvePath(pathLike));
+    },
+
+    readlinkSync(pathLike: unknown): string {
+      return vfs.readlinkSync(resolvePath(pathLike));
     },
 
     fstatSync(fd: number): Stats {
@@ -726,7 +768,7 @@ export function createFsShim(vfs: VirtualFS, getCwd?: () => string): FsShim {
         if (options?.force) return;
         throw createNodeError('ENOENT', 'rm', path);
       }
-      const stats = vfs.statSync(path);
+      const stats = vfs.lstatSync(path);
       if (stats.isDirectory()) {
         if (options?.recursive) {
           // Recursively delete directory contents
@@ -840,6 +882,24 @@ export function createFsShim(vfs: VirtualFS, getCwd?: () => string): FsShim {
       try {
         const stats = vfs.lstatSync(resolvePath(pathLike));
         defer(() => callback(null, stats));
+      } catch (error) {
+        defer(() => callback(error as Error));
+      }
+    },
+
+    symlink(target: string, pathLike: unknown, callback: (err: Error | null) => void): void {
+      try {
+        vfs.symlinkSync(String(target), resolvePath(pathLike));
+        defer(() => callback(null));
+      } catch (error) {
+        defer(() => callback(error as Error));
+      }
+    },
+
+    readlink(pathLike: unknown, callback: (err: Error | null, target?: string) => void): void {
+      try {
+        const target = vfs.readlinkSync(resolvePath(pathLike));
+        defer(() => callback(null, target));
       } catch (error) {
         defer(() => callback(error as Error));
       }

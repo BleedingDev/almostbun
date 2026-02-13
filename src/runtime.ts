@@ -62,8 +62,14 @@ import * as bunSqliteShim from './shims/bun-sqlite';
 import * as bunTestShim from './shims/bun-test';
 import * as bunFfiShim from './shims/bun-ffi';
 import * as bunJscShim from './shims/bun-jsc';
+import * as sqlite3Shim from './shims/sqlite3';
+import * as betterSqlite3Shim from './shims/better-sqlite3';
 import * as modernJsEffectClientShim from './shims/modernjs-effect-client';
 import * as modernJsEffectServerShim from './shims/modernjs-effect-server';
+import {
+  getNativeFallbackForResolvedPath,
+  getNativeFallbackForSpecifier,
+} from './native-fallbacks';
 import { resolve as resolveExports } from 'resolve.exports';
 
 /**
@@ -426,6 +432,9 @@ const builtinModules: Record<string, unknown> = {
   // Sentry SDK (no-op since error tracking isn't useful in browser runtime)
   '@sentry/node': sentryShim,
   '@sentry/core': sentryShim,
+  // Native package browser fallbacks
+  sqlite3: sqlite3Shim,
+  'better-sqlite3': ((betterSqlite3Shim as unknown as { default?: unknown }).default ?? betterSqlite3Shim),
   // Bun built-ins
   'bun:sqlite': bunSqliteShim,
   'bun:test': bunTestShim,
@@ -530,6 +539,43 @@ function createRequire(
 
     legacyEventsModuleCache = callableEmitter;
     return legacyEventsModuleCache;
+  };
+
+  const getFallbackModule = (fallbackModuleId: string): unknown | undefined => {
+    const candidate = builtinModules[fallbackModuleId];
+    if (candidate === undefined) {
+      return undefined;
+    }
+    if (
+      fallbackModuleId === 'better-sqlite3' &&
+      candidate &&
+      typeof candidate === 'object' &&
+      'default' in (candidate as Record<string, unknown>)
+    ) {
+      return (candidate as { default?: unknown }).default;
+    }
+    return candidate;
+  };
+
+  const resolveNativeFallback = (
+    requestedId: string,
+    resolvedPath?: string,
+    options?: { allowResolvedPath?: boolean }
+  ): unknown | undefined => {
+    const allowResolvedPath = options?.allowResolvedPath === true;
+    const fromResolvedPath = allowResolvedPath && resolvedPath
+      ? getNativeFallbackForResolvedPath(resolvedPath)
+      : null;
+    const fromSpecifier = getNativeFallbackForSpecifier(requestedId);
+    const fallback = fromResolvedPath ?? fromSpecifier;
+    if (!fallback) {
+      return undefined;
+    }
+    return getFallbackModule(fallback.fallbackModuleId);
+  };
+
+  const isNativeAddonRuntimeError = (error: unknown): boolean => {
+    return error instanceof Error && error.message.includes('Native addons are not supported in this runtime');
   };
 
   const getParsedPackageJson = (pkgPath: string): PackageJson | null => {
@@ -1764,6 +1810,11 @@ ${code}
       return builtinModules[id];
     }
 
+    const nativeFallback = resolveNativeFallback(id);
+    if (nativeFallback !== undefined) {
+      return nativeFallback;
+    }
+
     // Intercept rollup and esbuild - always use our shims
     // These packages have native binaries that don't work in browser
     if (id === 'rollup' || id.startsWith('rollup/') || id.startsWith('@rollup/')) {
@@ -1825,7 +1876,25 @@ ${code}
       };
     }
 
-    let loadedExports = loadModule(resolved).exports as any;
+    const resolvedNativeFallback = resolveNativeFallback(id, resolved);
+    if (resolvedNativeFallback !== undefined) {
+      return resolvedNativeFallback;
+    }
+
+    let loadedExports: any;
+    try {
+      loadedExports = loadModule(resolved).exports as any;
+    } catch (error) {
+      if (isNativeAddonRuntimeError(error)) {
+        const fallbackAfterError = resolveNativeFallback(id, resolved, {
+          allowResolvedPath: true,
+        });
+        if (fallbackAfterError !== undefined) {
+          return fallbackAfterError;
+        }
+      }
+      throw error;
+    }
 
     // CommonJS/ESM interop edge case:
     // Some packages expect require('lru-cache').LRUCache even when the package
@@ -2013,6 +2082,10 @@ ${code}
 
   require.resolve = (id: string): string => {
     if (id === 'bun' || id === 'fs' || id === 'fs/promises' || id === 'process' || builtinModules[id]) {
+      return id;
+    }
+    const nativeFallback = resolveNativeFallback(id);
+    if (nativeFallback !== undefined) {
       return id;
     }
     return resolveModule(id, currentDir);

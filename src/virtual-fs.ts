@@ -6,9 +6,10 @@ import type { VFSSnapshot, VFSFileEntry } from './runtime-interface';
 import { uint8ToBase64, base64ToUint8 } from './utils/binary-encoding';
 
 export interface FSNode {
-  type: 'file' | 'directory';
+  type: 'file' | 'directory' | 'symlink';
   content?: Uint8Array;
   children?: Map<string, FSNode>;
+  target?: string;
   mtime: number;
 }
 
@@ -71,7 +72,7 @@ export interface NodeError extends Error {
 }
 
 export function createNodeError(
-  code: 'ENOENT' | 'ENOTDIR' | 'EISDIR' | 'EEXIST' | 'ENOTEMPTY',
+  code: 'ENOENT' | 'ENOTDIR' | 'EISDIR' | 'EEXIST' | 'ENOTEMPTY' | 'ELOOP' | 'EINVAL',
   syscall: string,
   path: string,
   message?: string
@@ -82,6 +83,8 @@ export function createNodeError(
     EISDIR: -21,
     EEXIST: -17,
     ENOTEMPTY: -39,
+    ELOOP: -40,
+    EINVAL: -22,
   };
 
   const messages: Record<string, string> = {
@@ -90,6 +93,8 @@ export function createNodeError(
     EISDIR: 'is a directory',
     EEXIST: 'file already exists',
     ENOTEMPTY: 'directory not empty',
+    ELOOP: 'too many symbolic links encountered',
+    EINVAL: 'invalid argument',
   };
 
   const err = new Error(
@@ -103,6 +108,7 @@ export function createNodeError(
 }
 
 export class VirtualFS {
+  private static readonly MAX_SYMLINK_DEPTH = 40;
   private root: FSNode;
   private encoder = new TextEncoder();
   private decoder = new TextDecoder();
@@ -178,6 +184,8 @@ export class VirtualFS {
         content = uint8ToBase64(node.content);
       }
       files.push({ path, type: 'file', content });
+    } else if (node.type === 'symlink') {
+      files.push({ path, type: 'symlink', target: node.target || '' });
     } else if (node.type === 'directory') {
       files.push({ path, type: 'directory' });
       if (node.children) {
@@ -206,6 +214,12 @@ export class VirtualFS {
 
       if (entry.type === 'directory') {
         vfs.mkdirSync(entry.path, { recursive: true });
+      } else if (entry.type === 'symlink') {
+        const parentPath = entry.path.substring(0, entry.path.lastIndexOf('/')) || '/';
+        if (parentPath !== '/' && !vfs.existsSync(parentPath)) {
+          vfs.mkdirSync(parentPath, { recursive: true });
+        }
+        vfs.symlinkSync(entry.target || '', entry.path);
       } else if (entry.type === 'file') {
         // Decode base64 content
         let content: Uint8Array;
@@ -230,16 +244,21 @@ export class VirtualFS {
    * Internal write that optionally emits events
    */
   private writeFileSyncInternal(path: string, data: string | Uint8Array, emitEvent: boolean): void {
-    const normalized = this.normalizePath(path);
-    const parentPath = this.getParentPath(normalized);
-    const basename = this.getBasename(normalized);
+    const requestedPath = this.normalizePath(path);
+    const writablePath = this.resolveWritablePath(path);
+    const parentPath = this.getParentPath(writablePath);
+    const basename = this.getBasename(writablePath);
 
     if (!basename) {
       throw new Error(`EISDIR: illegal operation on a directory, '${path}'`);
     }
 
     const parent = this.ensureDirectory(parentPath);
-    const existed = parent.children!.has(basename);
+    const existing = parent.children!.get(basename);
+    if (existing?.type === 'directory') {
+      throw createNodeError('EISDIR', 'open', path);
+    }
+    const existed = !!existing;
 
     const content = typeof data === 'string' ? this.encoder.encode(data) : data;
 
@@ -250,10 +269,19 @@ export class VirtualFS {
     });
 
     if (emitEvent) {
+      const eventPaths = requestedPath === writablePath
+        ? [requestedPath]
+        : [requestedPath, writablePath];
+      const textContent = typeof data === 'string' ? data : this.decoder.decode(data);
+
       // Notify watchers
-      this.notifyWatchers(normalized, existed ? 'change' : 'rename');
+      for (const eventPath of eventPaths) {
+        this.notifyWatchers(eventPath, existed ? 'change' : 'rename');
+      }
       // Emit change event for worker sync
-      this.emit('change', normalized, typeof data === 'string' ? data : this.decoder.decode(data));
+      for (const eventPath of eventPaths) {
+        this.emit('change', eventPath, textContent);
+      }
     }
   }
 
@@ -277,6 +305,18 @@ export class VirtualFS {
     }
 
     return '/' + resolved.join('/');
+  }
+
+  private toAbsolutePath(path: string): string {
+    const normalized = path.replace(/\\/g, '/');
+    return normalized.startsWith('/') ? normalized : `/${normalized}`;
+  }
+
+  private getTraversalSegments(path: string): string[] {
+    return this
+      .toAbsolutePath(path)
+      .split('/')
+      .filter((segment) => segment.length > 0 && segment !== '.');
   }
 
   /**
@@ -305,81 +345,164 @@ export class VirtualFS {
   }
 
   /**
-   * Get node at path, returns undefined if not found
+   * Resolve a symlink target from the symlink's parent directory
    */
-  private getNode(path: string): FSNode | undefined {
-    const segments = this.getPathSegments(path);
-    let current = this.root;
+  private resolveSymlinkTarget(target: string, symlinkParentSegments: string[]): string {
+    if (target.startsWith('/')) {
+      return this.normalizePath(target);
+    }
+    const joined = ['/', ...symlinkParentSegments, target].join('/');
+    return this.normalizePath(joined);
+  }
 
-    for (const segment of segments) {
+  /**
+   * Resolve node at path with optional final symlink traversal
+   */
+  private resolveNode(path: string, syscall: string, followFinalSymlink: boolean): {
+    node: FSNode;
+    resolvedPath: string;
+  } {
+    let segments = this.getTraversalSegments(path);
+    let current = this.root;
+    let resolvedSegments: string[] = [];
+    let resolvedNodes: FSNode[] = [this.root];
+    let symlinkDepth = 0;
+
+    for (let index = 0; index < segments.length; index += 1) {
+      const segment = segments[index];
+
       if (current.type !== 'directory' || !current.children) {
-        return undefined;
+        throw createNodeError('ENOTDIR', syscall, path);
       }
+
+      if (segment === '..') {
+        if (resolvedSegments.length > 0) {
+          resolvedSegments.pop();
+          resolvedNodes.pop();
+        }
+        current = resolvedNodes[resolvedNodes.length - 1] || this.root;
+        continue;
+      }
+
       const child = current.children.get(segment);
       if (!child) {
-        return undefined;
-      }
-      current = child;
-    }
-
-    return current;
-  }
-
-  /**
-   * Get or create directory at path (for mkdir -p behavior)
-   */
-  private ensureDirectory(path: string): FSNode {
-    const segments = this.getPathSegments(path);
-    let current = this.root;
-
-    for (const segment of segments) {
-      if (!current.children) {
-        current.children = new Map();
+        throw createNodeError('ENOENT', syscall, path);
       }
 
-      let child = current.children.get(segment);
-      if (!child) {
-        child = { type: 'directory', children: new Map(), mtime: Date.now() };
-        current.children.set(segment, child);
-      } else if (child.type !== 'directory') {
-        throw new Error(`ENOTDIR: not a directory, '${path}'`);
+      const isLast = index === segments.length - 1;
+      if (child.type === 'symlink' && (!isLast || followFinalSymlink)) {
+        symlinkDepth += 1;
+        if (symlinkDepth > VirtualFS.MAX_SYMLINK_DEPTH) {
+          throw createNodeError('ELOOP', syscall, path);
+        }
+
+        const targetPath = this.resolveSymlinkTarget(child.target || '', resolvedSegments);
+        const remaining = segments.slice(index + 1);
+        segments = [...this.getTraversalSegments(targetPath), ...remaining];
+        current = this.root;
+        resolvedSegments = [];
+        resolvedNodes = [this.root];
+        index = -1;
+        continue;
       }
 
       current = child;
+      resolvedSegments.push(segment);
+      resolvedNodes.push(child);
     }
 
-    return current;
+    const resolvedPath = resolvedSegments.length === 0 ? '/' : `/${resolvedSegments.join('/')}`;
+    return { node: current, resolvedPath };
   }
 
   /**
-   * Check if path exists
+   * Resolve writable destination path (follows final symlink if present)
    */
-  existsSync(path: string): boolean {
-    return this.getNode(path) !== undefined;
-  }
-
-  /**
-   * Get stats for path
-   */
-  statSync(path: string): Stats {
-    const node = this.getNode(path);
-    if (!node) {
-      throw createNodeError('ENOENT', 'stat', path);
+  private resolveWritablePath(path: string): string {
+    const absolutePath = this.toAbsolutePath(path);
+    let lstatResult: { node: FSNode; resolvedPath: string } | null = null;
+    try {
+      lstatResult = this.resolveNode(absolutePath, 'open', false);
+    } catch (error) {
+      const err = error as NodeError;
+      if (err.code !== 'ENOENT') {
+        throw error;
+      }
     }
 
-    const size = node.type === 'file' ? (node.content?.length || 0) : 0;
+    if (!lstatResult) {
+      const traversalSegments = this.getTraversalSegments(absolutePath);
+      const basename = traversalSegments[traversalSegments.length - 1];
+      if (basename && basename !== '..') {
+        const parentSegments = traversalSegments.slice(0, -1);
+        const parentInputPath = parentSegments.length > 0
+          ? `/${parentSegments.join('/')}`
+          : '/';
+        try {
+          const parentResolved = this.resolveNode(parentInputPath, 'open', true);
+          if (parentResolved.node.type === 'directory') {
+            return parentResolved.resolvedPath === '/'
+              ? `/${basename}`
+              : `${parentResolved.resolvedPath}/${basename}`;
+          }
+        } catch (error) {
+          const err = error as NodeError;
+          if (err.code !== 'ENOENT' && err.code !== 'ENOTDIR') {
+            throw error;
+          }
+        }
+      }
+      return this.normalizePath(absolutePath);
+    }
+
+    if (lstatResult.node.type === 'directory') {
+      throw createNodeError('EISDIR', 'open', path);
+    }
+
+    if (lstatResult.node.type === 'file') {
+      return lstatResult.resolvedPath;
+    }
+
+    const symlinkParent = this.getPathSegments(this.getParentPath(lstatResult.resolvedPath));
+    const targetPath = this.resolveSymlinkTarget(lstatResult.node.target || '', symlinkParent);
+    try {
+      const resolvedTarget = this.resolveNode(targetPath, 'open', true);
+      if (resolvedTarget.node.type === 'directory') {
+        throw createNodeError('EISDIR', 'open', path);
+      }
+      return resolvedTarget.resolvedPath;
+    } catch (error) {
+      const err = error as NodeError;
+      if (err.code === 'ENOENT') {
+        return this.normalizePath(targetPath);
+      }
+      throw error;
+    }
+  }
+
+  private createStats(node: FSNode): Stats {
+    const size = node.type === 'file'
+      ? (node.content?.length || 0)
+      : node.type === 'symlink'
+        ? (node.target?.length || 0)
+        : 0;
     const mtime = node.mtime;
+    const mode = node.type === 'directory'
+      ? 0o755
+      : node.type === 'symlink'
+        ? 0o777
+        : 0o644;
 
     return {
       isFile: () => node.type === 'file',
       isDirectory: () => node.type === 'directory',
-      isSymbolicLink: () => false,
+      isSymbolicLink: () => node.type === 'symlink',
       isBlockDevice: () => false,
       isCharacterDevice: () => false,
       isFIFO: () => false,
       isSocket: () => false,
       size,
-      mode: node.type === 'directory' ? 0o755 : 0o644,
+      mode,
       mtime: new Date(mtime),
       atime: new Date(mtime),
       ctime: new Date(mtime),
@@ -400,10 +523,77 @@ export class VirtualFS {
   }
 
   /**
-   * lstatSync - same as statSync for our virtual FS (no symlinks)
+   * Get or create directory at path (for mkdir -p behavior)
+   */
+  private ensureDirectory(path: string): FSNode {
+    const segments = this.getPathSegments(path);
+    let current = this.root;
+    let resolvedSegments: string[] = [];
+    let symlinkDepth = 0;
+
+    for (const segment of segments) {
+      if (current.type !== 'directory') {
+        throw createNodeError('ENOTDIR', 'mkdir', path);
+      }
+      if (!current.children) {
+        current.children = new Map();
+      }
+
+      let child = current.children.get(segment);
+      if (!child) {
+        child = { type: 'directory', children: new Map(), mtime: Date.now() };
+        current.children.set(segment, child);
+      } else if (child.type === 'symlink') {
+        symlinkDepth += 1;
+        if (symlinkDepth > VirtualFS.MAX_SYMLINK_DEPTH) {
+          throw createNodeError('ELOOP', 'mkdir', path);
+        }
+
+        const targetPath = this.resolveSymlinkTarget(child.target || '', resolvedSegments);
+        const resolvedTarget = this.resolveNode(targetPath, 'mkdir', true);
+        if (resolvedTarget.node.type !== 'directory') {
+          throw createNodeError('ENOTDIR', 'mkdir', path);
+        }
+        current = resolvedTarget.node;
+        resolvedSegments = this.getPathSegments(resolvedTarget.resolvedPath);
+        continue;
+      } else if (child.type !== 'directory') {
+        throw createNodeError('ENOTDIR', 'mkdir', path);
+      }
+
+      current = child;
+      resolvedSegments.push(segment);
+    }
+
+    return current;
+  }
+
+  /**
+   * Check if path exists
+   */
+  existsSync(path: string): boolean {
+    try {
+      this.resolveNode(path, 'stat', true);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Get stats for path
+   */
+  statSync(path: string): Stats {
+    const { node } = this.resolveNode(path, 'stat', true);
+    return this.createStats(node);
+  }
+
+  /**
+   * lstatSync - returns symlink node stats without following final link
    */
   lstatSync(path: string): Stats {
-    return this.statSync(path);
+    const { node } = this.resolveNode(path, 'lstat', false);
+    return this.createStats(node);
   }
 
   /**
@@ -412,11 +602,7 @@ export class VirtualFS {
   readFileSync(path: string): Uint8Array;
   readFileSync(path: string, encoding: 'utf8' | 'utf-8'): string;
   readFileSync(path: string, encoding?: 'utf8' | 'utf-8'): Uint8Array | string {
-    const node = this.getNode(path);
-
-    if (!node) {
-      throw createNodeError('ENOENT', 'open', path);
-    }
+    const { node } = this.resolveNode(path, 'open', true);
 
     if (node.type !== 'file') {
       throw createNodeError('EISDIR', 'read', path);
@@ -456,11 +642,7 @@ export class VirtualFS {
       return; // Root directory already exists
     }
 
-    const parent = this.getNode(parentPath);
-
-    if (!parent) {
-      throw createNodeError('ENOENT', 'mkdir', parentPath);
-    }
+    const { node: parent } = this.resolveNode(parentPath, 'mkdir', true);
 
     if (parent.type !== 'directory') {
       throw createNodeError('ENOTDIR', 'mkdir', parentPath);
@@ -481,17 +663,53 @@ export class VirtualFS {
    * Read directory contents
    */
   readdirSync(path: string): string[] {
-    const node = this.getNode(path);
-
-    if (!node) {
-      throw createNodeError('ENOENT', 'scandir', path);
-    }
+    const { node } = this.resolveNode(path, 'scandir', true);
 
     if (node.type !== 'directory') {
       throw createNodeError('ENOTDIR', 'scandir', path);
     }
 
     return Array.from(node.children!.keys());
+  }
+
+  /**
+   * Create a symbolic link
+   */
+  symlinkSync(target: string, path: string): void {
+    const normalized = this.normalizePath(path);
+    const parentPath = this.getParentPath(normalized);
+    const basename = this.getBasename(normalized);
+
+    if (!basename) {
+      throw new Error(`EPERM: operation not permitted, symlink '${path}'`);
+    }
+
+    const { node: parent } = this.resolveNode(parentPath, 'symlink', true);
+    if (parent.type !== 'directory') {
+      throw createNodeError('ENOTDIR', 'symlink', parentPath);
+    }
+
+    if (parent.children!.has(basename)) {
+      throw createNodeError('EEXIST', 'symlink', path);
+    }
+
+    parent.children!.set(basename, {
+      type: 'symlink',
+      target,
+      mtime: Date.now(),
+    });
+    this.notifyWatchers(normalized, 'rename');
+  }
+
+  /**
+   * Read symbolic link target
+   */
+  readlinkSync(path: string): string {
+    const { node } = this.resolveNode(path, 'readlink', false);
+    if (node.type !== 'symlink') {
+      throw createNodeError('EINVAL', 'readlink', path);
+    }
+    return node.target || '';
   }
 
   /**
@@ -502,10 +720,9 @@ export class VirtualFS {
     const parentPath = this.getParentPath(normalized);
     const basename = this.getBasename(normalized);
 
-    const parent = this.getNode(parentPath);
-
-    if (!parent || parent.type !== 'directory') {
-      throw createNodeError('ENOENT', 'unlink', path);
+    const { node: parent } = this.resolveNode(parentPath, 'unlink', true);
+    if (parent.type !== 'directory') {
+      throw createNodeError('ENOTDIR', 'unlink', path);
     }
 
     const node = parent.children!.get(basename);
@@ -514,7 +731,7 @@ export class VirtualFS {
       throw createNodeError('ENOENT', 'unlink', path);
     }
 
-    if (node.type !== 'file') {
+    if (node.type === 'directory') {
       throw createNodeError('EISDIR', 'unlink', path);
     }
 
@@ -538,10 +755,9 @@ export class VirtualFS {
       throw new Error(`EPERM: operation not permitted, '${path}'`);
     }
 
-    const parent = this.getNode(parentPath);
-
-    if (!parent || parent.type !== 'directory') {
-      throw createNodeError('ENOENT', 'rmdir', path);
+    const { node: parent } = this.resolveNode(parentPath, 'rmdir', true);
+    if (parent.type !== 'directory') {
+      throw createNodeError('ENOTDIR', 'rmdir', path);
     }
 
     const node = parent.children!.get(basename);
@@ -573,10 +789,9 @@ export class VirtualFS {
     const newParentPath = this.getParentPath(normalizedNew);
     const newBasename = this.getBasename(normalizedNew);
 
-    const oldParent = this.getNode(oldParentPath);
-
-    if (!oldParent || oldParent.type !== 'directory') {
-      throw createNodeError('ENOENT', 'rename', oldPath);
+    const { node: oldParent } = this.resolveNode(oldParentPath, 'rename', true);
+    if (oldParent.type !== 'directory') {
+      throw createNodeError('ENOTDIR', 'rename', oldPath);
     }
 
     const node = oldParent.children!.get(oldBasename);
@@ -636,7 +851,12 @@ export class VirtualFS {
    * Async lstat
    */
   lstat(path: string, callback: (err: Error | null, stats?: Stats) => void): void {
-    this.stat(path, callback);
+    try {
+      const stats = this.lstatSync(path);
+      setTimeout(() => callback(null, stats), 0);
+    } catch (err) {
+      setTimeout(() => callback(err as Error), 0);
+    }
   }
 
   /**
@@ -674,14 +894,11 @@ export class VirtualFS {
   }
 
   /**
-   * Sync realpath - in our VFS, just normalize the path
+   * Sync realpath - resolves symbolic links
    */
   realpathSync(path: string): string {
-    const normalized = this.normalizePath(path);
-    if (!this.existsSync(normalized)) {
-      throw createNodeError('ENOENT', 'realpath', path);
-    }
-    return normalized;
+    const { resolvedPath } = this.resolveNode(path, 'realpath', true);
+    return resolvedPath;
   }
 
   /**
@@ -792,9 +1009,8 @@ export class VirtualFS {
    * Access check - in our VFS, always succeeds if file exists
    */
   accessSync(path: string, mode?: number): void {
-    if (!this.existsSync(path)) {
-      throw createNodeError('ENOENT', 'access', path);
-    }
+    void mode;
+    this.resolveNode(path, 'access', true);
   }
 
   /**

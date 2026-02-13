@@ -334,8 +334,8 @@ export function extractTarball(
   const extractedFiles: string[] = [];
 
   for (const entry of parseTar(tarData)) {
-    // Skip non-file/directory entries for now
-    if (entry.type !== 'file' && entry.type !== 'directory') {
+    // Skip unsupported entry types
+    if (entry.type !== 'file' && entry.type !== 'directory' && entry.type !== 'symlink') {
       continue;
     }
 
@@ -359,6 +359,11 @@ export function extractTarball(
 
     if (entry.type === 'directory') {
       vfs.mkdirSync(fullPath, { recursive: true });
+    } else if (entry.type === 'symlink') {
+      const parentDir = path.dirname(fullPath);
+      vfs.mkdirSync(parentDir, { recursive: true });
+      vfs.symlinkSync(entry.linkTarget || '', fullPath);
+      extractedFiles.push(fullPath);
     } else if (entry.type === 'file' && entry.content) {
       // Ensure parent directory exists
       const parentDir = path.dirname(fullPath);

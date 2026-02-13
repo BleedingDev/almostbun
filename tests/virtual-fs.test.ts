@@ -86,6 +86,88 @@ describe('VirtualFS', () => {
     });
   });
 
+  describe('symlinks', () => {
+    it('reads files through symlinks and keeps lstat/stat semantics', () => {
+      vfs.writeFileSync('/data/file.txt', 'hello');
+      vfs.symlinkSync('/data/file.txt', '/link.txt');
+
+      expect(vfs.readFileSync('/link.txt', 'utf8')).toBe('hello');
+      expect(vfs.statSync('/link.txt').isFile()).toBe(true);
+      expect(vfs.statSync('/link.txt').isSymbolicLink()).toBe(false);
+      expect(vfs.lstatSync('/link.txt').isSymbolicLink()).toBe(true);
+    });
+
+    it('supports readlink and realpath resolution', () => {
+      vfs.mkdirSync('/target', { recursive: true });
+      vfs.writeFileSync('/target/index.js', 'module.exports = true;');
+      vfs.symlinkSync('/target', '/alias');
+
+      expect(vfs.readlinkSync('/alias')).toBe('/target');
+      expect(vfs.realpathSync('/alias/index.js')).toBe('/target/index.js');
+    });
+
+    it('unlinks symlinks without deleting target files', () => {
+      vfs.writeFileSync('/source.txt', 'keep');
+      vfs.symlinkSync('/source.txt', '/source-link.txt');
+
+      vfs.unlinkSync('/source-link.txt');
+
+      expect(vfs.existsSync('/source-link.txt')).toBe(false);
+      expect(vfs.readFileSync('/source.txt', 'utf8')).toBe('keep');
+    });
+
+    it('throws EINVAL when readlink is used on non-symlink paths', () => {
+      vfs.writeFileSync('/plain.txt', 'value');
+      expect(() => vfs.readlinkSync('/plain.txt')).toThrow('EINVAL');
+    });
+
+    it('throws ELOOP for recursive symlinks', () => {
+      vfs.symlinkSync('/b', '/a');
+      vfs.symlinkSync('/a', '/b');
+      expect(() => vfs.realpathSync('/a')).toThrow('ELOOP');
+    });
+
+    it('resolves .. segments after following symlink targets', () => {
+      vfs.mkdirSync('/foo', { recursive: true });
+      vfs.mkdirSync('/baz', { recursive: true });
+      vfs.writeFileSync('/bar.txt', 'top-level');
+      vfs.symlinkSync('/baz', '/foo/link');
+
+      expect(vfs.realpathSync('/foo/link/../bar.txt')).toBe('/bar.txt');
+      expect(vfs.readFileSync('/foo/link/../bar.txt', 'utf8')).toBe('top-level');
+    });
+
+    it('emits change events for both alias and real path on symlink writes', () => {
+      const changes: string[] = [];
+      vfs.on('change', (changedPath) => {
+        changes.push(changedPath);
+      });
+
+      vfs.writeFileSync('/data/file.txt', 'one');
+      vfs.symlinkSync('/data/file.txt', '/alias.txt');
+      vfs.writeFileSync('/alias.txt', 'two');
+
+      expect(changes).toContain('/alias.txt');
+      expect(changes).toContain('/data/file.txt');
+      expect(vfs.readFileSync('/data/file.txt', 'utf8')).toBe('two');
+    });
+
+    it('emits real-path change when creating new files through symlinked directories', () => {
+      const changes: string[] = [];
+      vfs.on('change', (changedPath) => {
+        changes.push(changedPath);
+      });
+
+      vfs.mkdirSync('/real', { recursive: true });
+      vfs.symlinkSync('/real', '/alias');
+      vfs.writeFileSync('/alias/new.txt', 'created-via-alias');
+
+      expect(changes).toContain('/alias/new.txt');
+      expect(changes).toContain('/real/new.txt');
+      expect(vfs.readFileSync('/real/new.txt', 'utf8')).toBe('created-via-alias');
+    });
+  });
+
   describe('mkdirSync', () => {
     it('should create a directory', () => {
       vfs.mkdirSync('/newdir');

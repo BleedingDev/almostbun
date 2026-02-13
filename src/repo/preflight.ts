@@ -1,5 +1,6 @@
 import * as path from '../shims/path';
 import { VirtualFS } from '../virtual-fs';
+import { getNativePackageSupport } from '../native-fallbacks';
 
 type PackageJsonLike = {
   name?: string;
@@ -242,6 +243,38 @@ export function runRepoPreflight(
   }
 
   const dependencySpecs = collectDependencySpecs(pkg);
+  const reportedNativePackages = new Set<string>();
+  for (const dependency of dependencySpecs) {
+    if (reportedNativePackages.has(dependency.name)) {
+      continue;
+    }
+    reportedNativePackages.add(dependency.name);
+
+    const nativeSupport = getNativePackageSupport(dependency.name);
+    if (!nativeSupport) {
+      continue;
+    }
+
+    if (nativeSupport.kind === 'fallback') {
+      issues.push({
+        code: 'preflight.native.fallback-available',
+        severity: 'info',
+        message:
+          `Native package "${dependency.name}" will use browser fallback "${nativeSupport.fallbackModuleId}". ${nativeSupport.note}`,
+        path: path.posix.join(normalizedProjectPath, 'package.json'),
+      });
+      continue;
+    }
+
+    issues.push({
+      code: 'preflight.native.unsupported',
+      severity: 'warning',
+      message:
+        `Native package "${dependency.name}" is likely unsupported in browser runtime. ${nativeSupport.note}`,
+      path: path.posix.join(normalizedProjectPath, 'package.json'),
+    });
+  }
+
   const workspaceDeps = dependencySpecs.filter((entry) => entry.spec.startsWith('workspace:'));
   const workspaceRoot = findWorkspaceRoot(vfs, normalizedProjectPath);
   if (workspaceDeps.length > 0 && !workspaceRoot) {

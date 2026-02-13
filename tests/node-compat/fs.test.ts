@@ -166,6 +166,15 @@ describe('fs module (Node.js compat)', () => {
       expect(subdir?.isDirectory()).toBe(true);
     });
 
+    it('should mark symlinks in Dirent results', () => {
+      fs.symlinkSync('/dir/file1.txt', '/dir/file-link.txt');
+      const entries = fs.readdirSync('/dir', { withFileTypes: true }) as Dirent[];
+      const symlink = entries.find(entry => entry.name === 'file-link.txt');
+      expect(symlink?.isSymbolicLink()).toBe(true);
+      expect(symlink?.isDirectory()).toBe(false);
+      expect(symlink?.isFile()).toBe(false);
+    });
+
     it('should throw ENOENT for non-existent directory', () => {
       assert.throws(
         () => fs.readdirSync('/nonexistent'),
@@ -222,6 +231,18 @@ describe('fs module (Node.js compat)', () => {
       vfs.writeFileSync('/file.txt', 'content');
       const stats = fs.lstatSync('/file.txt');
       assert.strictEqual(stats.isFile(), true);
+    });
+
+    it('should preserve symlink metadata', () => {
+      vfs.writeFileSync('/target.txt', 'content');
+      fs.symlinkSync('/target.txt', '/target-link.txt');
+
+      const linkStats = fs.lstatSync('/target-link.txt');
+      const targetStats = fs.statSync('/target-link.txt');
+
+      assert.strictEqual(linkStats.isSymbolicLink(), true);
+      assert.strictEqual(targetStats.isSymbolicLink(), false);
+      assert.strictEqual(targetStats.isFile(), true);
     });
   });
 
@@ -326,6 +347,20 @@ describe('fs module (Node.js compat)', () => {
     it('should expose realpath native helpers for compatibility', () => {
       assert.strictEqual(typeof (fs.realpath as unknown as { native?: unknown }).native, 'function');
       assert.strictEqual(typeof (fs.realpathSync as unknown as { native?: unknown }).native, 'function');
+    });
+
+    it('should resolve symlink targets', () => {
+      vfs.writeFileSync('/real/file.txt', 'content');
+      fs.symlinkSync('/real', '/shortcut');
+      const realpath = fs.realpathSync('/shortcut/file.txt');
+      assert.strictEqual(realpath, '/real/file.txt');
+    });
+  });
+
+  describe('fs.readlinkSync()', () => {
+    it('returns the symlink target path', () => {
+      fs.symlinkSync('/target', '/shortcut');
+      assert.strictEqual(fs.readlinkSync('/shortcut'), '/target');
     });
   });
 

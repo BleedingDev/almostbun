@@ -315,6 +315,80 @@ describe('Runtime', () => {
       expect(exports).toEqual({ mode: 'fallback' });
     });
 
+    it('provides sqlite3 fallback shim for native package imports', () => {
+      const { exports } = runtime.execute(`
+        const sqlite3 = require('sqlite3');
+        const db = new sqlite3.Database(':memory:');
+        db.exec('CREATE TABLE users (id INT, name TEXT)');
+        const runResult = db.run('INSERT INTO users VALUES (?, ?)', 1, 'Ada');
+        module.exports = {
+          hasDatabase: typeof sqlite3.Database === 'function',
+          verbose: typeof sqlite3.verbose === 'function',
+          runReturnsDatabase: runResult === db,
+        };
+      `);
+
+      expect(exports).toEqual({
+        hasDatabase: true,
+        verbose: true,
+        runReturnsDatabase: true,
+      });
+    });
+
+    it('provides better-sqlite3 fallback shim for native package imports', () => {
+      const { exports } = runtime.execute(`
+        const Database = require('better-sqlite3');
+        const db = new Database(':memory:');
+        db.exec('CREATE TABLE users (id INT, name TEXT)');
+        const insert = db.prepare('INSERT INTO users VALUES (?, ?)');
+        insert.run(1, 'Grace');
+        const row = db.prepare('SELECT name FROM users WHERE id = ?').get(1);
+        module.exports = {
+          hasPrepare: typeof db.prepare === 'function',
+          row: row && row.name,
+        };
+      `);
+
+      expect(exports).toEqual({
+        hasPrepare: true,
+        row: 'Grace',
+      });
+    });
+
+    it('does not hijack sqlite3 subpath imports when real files exist', () => {
+      vfs.writeFileSync(
+        '/node_modules/sqlite3/package.json',
+        JSON.stringify({
+          name: 'sqlite3',
+          version: '9.9.9-test',
+        })
+      );
+
+      const { exports } = runtime.execute(`
+        module.exports = require('sqlite3/package.json');
+      `);
+
+      expect(exports).toMatchObject({
+        name: 'sqlite3',
+        version: '9.9.9-test',
+      });
+    });
+
+    it('applies sqlite fallback after native addon runtime errors on resolved node_modules paths', () => {
+      vfs.writeFileSync(
+        '/node_modules/sqlite3/index.js',
+        'throw new Error("Native addons are not supported in this runtime");'
+      );
+
+      const { exports } = runtime.execute(`
+        module.exports = require('/node_modules/sqlite3/index.js');
+      `);
+
+      expect(exports).toMatchObject({
+        Database: expect.any(Function),
+      });
+    });
+
     it('should resolve relative modules', () => {
       vfs.writeFileSync('/lib/helper.js', 'module.exports = { value: 42 };');
 

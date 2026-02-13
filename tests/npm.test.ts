@@ -395,6 +395,20 @@ describe('npm', () => {
       expect(vfs.existsSync('/pkg/test.js')).toBe(true);
       expect(vfs.existsSync('/pkg/README.md')).toBe(false);
     });
+
+    it('should extract symbolic links from tarballs', () => {
+      const tarball = createMinimalTarball({
+        'package/index.js': 'module.exports = 1;',
+        'package/index-link.js': { type: 'symlink', target: 'index.js' },
+      });
+      const compressed = pako.gzip(tarball);
+
+      extractTarball(compressed, vfs, '/pkg', { stripComponents: 1 });
+
+      expect(vfs.lstatSync('/pkg/index-link.js').isSymbolicLink()).toBe(true);
+      expect(vfs.readlinkSync('/pkg/index-link.js')).toBe('index.js');
+      expect(vfs.readFileSync('/pkg/index-link.js', 'utf8')).toBe('module.exports = 1;');
+    });
   });
 
   describe('PackageManager', () => {
@@ -2157,12 +2171,23 @@ this is not valid json
 /**
  * Create a minimal tar archive for testing
  */
-function createMinimalTarball(files: Record<string, string>): Uint8Array {
+type TarFixtureEntry =
+  | string
+  | {
+    type: 'symlink';
+    target: string;
+  };
+
+function createMinimalTarball(files: Record<string, TarFixtureEntry>): Uint8Array {
   const encoder = new TextEncoder();
   const chunks: Uint8Array[] = [];
 
-  for (const [filename, content] of Object.entries(files)) {
-    const contentBytes = encoder.encode(content);
+  for (const [filename, entry] of Object.entries(files)) {
+    const isSymlink = typeof entry === 'object' && entry?.type === 'symlink';
+    const linkTarget = isSymlink ? entry.target : '';
+    const contentBytes = isSymlink
+      ? new Uint8Array(0)
+      : encoder.encode(typeof entry === 'string' ? entry : '');
 
     // Create 512-byte header
     const header = new Uint8Array(512);
@@ -2190,8 +2215,13 @@ function createMinimalTarball(files: Record<string, string>): Uint8Array {
     // Initially set checksum field to spaces for calculation
     header.set(encoder.encode('        '), 148);
 
-    // Type flag (156) - '0' for regular file
-    header[156] = 48; // '0'
+    // Type flag (156)
+    header[156] = isSymlink ? 50 : 48; // '2' for symlink, '0' for regular file
+
+    // Link name (157-257) for symlinks
+    if (isSymlink) {
+      header.set(encoder.encode(linkTarget).slice(0, 100), 157);
+    }
 
     // Calculate checksum (sum of all bytes in header)
     let checksum = 0;

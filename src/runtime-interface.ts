@@ -98,6 +98,7 @@ export interface VFSSnapshot {
 
 export interface VFSFileEntry {
   path: string;
-  type: 'file' | 'directory';
+  type: 'file' | 'directory' | 'symlink';
   content?: string; // base64 encoded for binary files
+  target?: string;
 }

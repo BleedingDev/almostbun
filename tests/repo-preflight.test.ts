@@ -107,4 +107,50 @@ describe('repo preflight', () => {
     const result = runRepoPreflight(vfs, '/project');
     expect(result.issues.some(issue => issue.code === 'preflight.exports.subpath-missing')).toBe(false);
   });
+
+  it('reports native package fallbacks when available', () => {
+    const vfs = new VirtualFS();
+    vfs.writeFileSync(
+      '/project/package.json',
+      JSON.stringify({
+        name: 'sqlite-app',
+        dependencies: {
+          sqlite3: '^5.1.7',
+        },
+      })
+    );
+
+    const result = runRepoPreflight(vfs, '/project');
+    expect(
+      result.issues.some(
+        issue =>
+          issue.code === 'preflight.native.fallback-available' &&
+          issue.severity === 'info' &&
+          issue.message.includes('sqlite3')
+      )
+    ).toBe(true);
+  });
+
+  it('warns for native packages without browser fallbacks', () => {
+    const vfs = new VirtualFS();
+    vfs.writeFileSync(
+      '/project/package.json',
+      JSON.stringify({
+        name: 'image-app',
+        dependencies: {
+          sharp: '^0.33.0',
+        },
+      })
+    );
+
+    const result = runRepoPreflight(vfs, '/project');
+    expect(
+      result.issues.some(
+        issue =>
+          issue.code === 'preflight.native.unsupported' &&
+          issue.severity === 'warning' &&
+          issue.message.includes('sharp')
+      )
+    ).toBe(true);
+  });
 });

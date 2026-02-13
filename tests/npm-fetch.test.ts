@@ -48,6 +48,73 @@ describe('npm fetch retries', () => {
     expect(response.status).toBe(200);
   });
 
+  it('retries transport termination errors', async () => {
+    let attempts = 0;
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {
+      attempts++;
+      if (attempts === 1) {
+        throw new TypeError('terminated');
+      }
+      return new Response('ok', { status: 200 });
+    });
+
+    const response = await fetchWithRetry(
+      'https://registry.npmjs.org/example',
+      undefined,
+      { attempts: 2, baseDelayMs: 0, maxDelayMs: 0 }
+    );
+
+    expect(attempts).toBe(2);
+    expect(response.status).toBe(200);
+  });
+
+  it('does not retry AbortError cancellations', async () => {
+    let attempts = 0;
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {
+      attempts++;
+      if (attempts === 1) {
+        const error = Object.assign(new Error('The operation was aborted'), {
+          name: 'AbortError',
+        });
+        throw error;
+      }
+      return new Response('ok', { status: 200 });
+    });
+
+    await expect(
+      fetchWithRetry(
+        'https://registry.npmjs.org/example',
+        undefined,
+        { attempts: 2, baseDelayMs: 0, maxDelayMs: 0 }
+      )
+    ).rejects.toThrow('aborted');
+
+    expect(attempts).toBe(1);
+  });
+
+  it('retries network errors that expose retryable cause.code', async () => {
+    let attempts = 0;
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {
+      attempts++;
+      if (attempts === 1) {
+        const error = Object.assign(new TypeError('fetch failed'), {
+          cause: { code: 'ECONNRESET' },
+        });
+        throw error;
+      }
+      return new Response('ok', { status: 200 });
+    });
+
+    const response = await fetchWithRetry(
+      'https://registry.npmjs.org/example',
+      undefined,
+      { attempts: 2, baseDelayMs: 0, maxDelayMs: 0 }
+    );
+
+    expect(attempts).toBe(2);
+    expect(response.status).toBe(200);
+  });
+
   it('retries retryable HTTP status codes', async () => {
     let attempts = 0;
     vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {

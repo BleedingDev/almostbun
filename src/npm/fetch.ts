@@ -84,6 +84,20 @@ function errorCode(error: unknown): string | undefined {
   return (error as { code?: string }).code;
 }
 
+function errorName(error: unknown): string | undefined {
+  if (!error || typeof error !== 'object') return undefined;
+  return (error as { name?: string }).name;
+}
+
+function errorCauseCode(error: unknown): string | undefined {
+  if (!error || typeof error !== 'object') return undefined;
+  const cause = (error as { cause?: unknown }).cause;
+  if (!cause || typeof cause !== 'object') {
+    return undefined;
+  }
+  return (cause as { code?: string }).code;
+}
+
 function getRuntimeEnvValue(name: string): string | undefined {
   try {
     const runtimeProcess = (globalThis as typeof globalThis & {
@@ -130,12 +144,23 @@ function isRetryableNetworkError(error: unknown): boolean {
   if (!error) return false;
 
   const code = errorCode(error);
+  const causeCode = errorCauseCode(error);
+  const name = errorName(error);
   if (
     code === 'UND_ERR_CONNECT_TIMEOUT' ||
+    code === 'UND_ERR_SOCKET' ||
+    code === 'UND_ERR_ABORTED' ||
     code === 'ECONNRESET' ||
     code === 'ECONNABORTED' ||
     code === 'ENOTFOUND' ||
-    code === 'ETIMEDOUT'
+    code === 'ETIMEDOUT' ||
+    causeCode === 'UND_ERR_CONNECT_TIMEOUT' ||
+    causeCode === 'UND_ERR_SOCKET' ||
+    causeCode === 'UND_ERR_ABORTED' ||
+    causeCode === 'ECONNRESET' ||
+    causeCode === 'ECONNABORTED' ||
+    causeCode === 'ENOTFOUND' ||
+    causeCode === 'ETIMEDOUT'
   ) {
     return true;
   }
@@ -145,6 +170,11 @@ function isRetryableNetworkError(error: unknown): boolean {
     message.includes('networkerror') ||
     message.includes('timed out') ||
     message.includes('connect timeout') ||
+    message.includes('connection terminated') ||
+    message.includes('terminated') ||
+    message.includes('aborted') ||
+    message.includes('socket hang up') ||
+    message.includes('connection closed') ||
     message.includes('fetch failed') ||
     message.includes('failed to fetch')
   );
@@ -527,6 +557,10 @@ export async function fetchWithRetry(
       return response;
     } catch (error) {
       lastError = error;
+      // Respect caller-initiated cancellations and abort-like failures immediately.
+      if (init?.signal?.aborted || errorName(error) === 'AbortError') {
+        break;
+      }
       if (!isRetryableNetworkError(error) || attempt >= attempts) {
         break;
       }
