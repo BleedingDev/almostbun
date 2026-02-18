@@ -6,6 +6,7 @@
  */
 
 import { VirtualFS } from './virtual-fs';
+import { ESBUILD_WASM_ESM_CDN, ESBUILD_WASM_BINARY_CDN } from './config/cdn';
 
 // Check if we're in a browser environment
 const isBrowser = typeof window !== 'undefined';
@@ -133,7 +134,7 @@ export async function initTransformer(): Promise<void> {
       // Load esbuild-wasm from CDN
       const mod = await import(
         /* @vite-ignore */
-        'https://esm.sh/esbuild-wasm@0.20.0'
+        ESBUILD_WASM_ESM_CDN
       );
 
       // esm.sh wraps the module - get the actual esbuild object
@@ -141,7 +142,7 @@ export async function initTransformer(): Promise<void> {
 
       try {
         await esbuildMod.initialize({
-          wasmURL: 'https://unpkg.com/esbuild-wasm@0.20.0/esbuild.wasm',
+          wasmURL: ESBUILD_WASM_BINARY_CDN,
         });
         console.log('[transform] esbuild-wasm initialized');
       } catch (initError) {

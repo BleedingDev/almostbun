@@ -239,12 +239,67 @@ runtime<span class="op">.</span><span class="fn">runFile</span><span class="op">
       <li><strong>Utilities</strong> — <code>echo</code>, <code>env</code>, <code>find</code>, <code>pwd</code>, <code>date</code>, <code>seq</code>, <code>xargs</code>, <code>tee</code>, <code>which</code></li>
       <li><strong>Shell features</strong> — pipes (<code>|</code>), redirects (<code>&gt;</code>, <code>&gt;&gt;</code>), environment variables, subshells</li>
       <li><strong>Custom: <code>node &lt;script&gt;</code></strong> — Runs a JavaScript file using the almostnode Runtime</li>
+      <li><strong>Custom: <code>npm &lt;command&gt;</code></strong> — Runs npm scripts, installs packages, and lists dependencies (see below)</li>
+      <li><strong>Custom: <code>vitest run</code></strong> — Runs vitest unit tests once using real <code>@vitest/expect</code> assertions (after <code>npm install vitest</code>)</li>
+      <li><strong>Custom: <code>vitest</code> / <code>vitest watch</code></strong> — Watch mode: runs tests then re-runs automatically when VFS files change. Use with <code>container.run()</code> streaming options (see below)</li>
       <li><strong>Custom: <code>convex &lt;args&gt;</code></strong> — Runs the Convex CLI bundle (after <code>npm install convex</code>)</li>
     </ul>
 
+    <h3>npm Scripts</h3>
+    <p>Run scripts defined in <code>package.json</code> using the built-in <code>npm</code> command. Supports <code>npm run &lt;script&gt;</code>, <code>npm start</code>, <code>npm test</code>, <code>npm install</code>, and <code>npm ls</code>. Pre/post lifecycle scripts (<code>prebuild</code>, <code>postbuild</code>, etc.) run automatically.</p>
+
+    <pre><code><span class="kw">const</span> container <span class="op">=</span> <span class="fn">createContainer</span><span class="op">();</span>
+
+<span class="cm">// Run shell commands directly with container.run()</span>
+<span class="kw">const</span> result <span class="op">=</span> <span class="kw">await</span> container<span class="op">.</span><span class="fn">run</span><span class="op">(</span><span class="str">'npm run build'</span><span class="op">);</span>
+console<span class="op">.</span><span class="fn">log</span><span class="op">(</span>result<span class="op">.</span>stdout<span class="op">);</span>
+
+<span class="kw">await</span> container<span class="op">.</span><span class="fn">run</span><span class="op">(</span><span class="str">'npm test'</span><span class="op">);</span>
+<span class="kw">await</span> container<span class="op">.</span><span class="fn">run</span><span class="op">(</span><span class="str">'ls /'</span><span class="op">);</span></code></pre>
+
+    <p>Try the <a href="../examples/npm-scripts-demo.html">interactive npm scripts demo</a> or the <a href="../examples/vitest-demo.html">vitest testing demo</a> to see it in action.</p>
+
+    <h3>Streaming Output &amp; Watch Mode</h3>
+    <p><code>container.run()</code> accepts optional streaming callbacks and an <code>AbortSignal</code> for long-running commands like vitest watch mode:</p>
+
+    <pre><code><span class="kw">const</span> controller <span class="op">=</span> <span class="kw">new</span> <span class="fn">AbortController</span><span class="op">();</span>
+
+<span class="cm">// Start vitest in watch mode with streaming output</span>
+container<span class="op">.</span><span class="fn">run</span><span class="op">(</span><span class="str">'vitest'</span><span class="op">,</span> <span class="op">{</span>
+  <span class="fn">onStdout</span><span class="op">:</span> <span class="op">(</span>data<span class="op">)</span> <span class="op">=&gt;</span> console<span class="op">.</span><span class="fn">log</span><span class="op">(</span>data<span class="op">),</span>
+  <span class="fn">onStderr</span><span class="op">:</span> <span class="op">(</span>data<span class="op">)</span> <span class="op">=&gt;</span> console<span class="op">.</span><span class="fn">error</span><span class="op">(</span>data<span class="op">),</span>
+  signal<span class="op">:</span> controller<span class="op">.</span>signal<span class="op">,</span>
+<span class="op">});</span>
+
+<span class="cm">// Tests re-run automatically when VFS files change.</span>
+<span class="cm">// Stop watching:</span>
+controller<span class="op">.</span><span class="fn">abort</span><span class="op">();</span></code></pre>
+
+    <h3>Installing Packages — API Overview</h3>
+    <p>There are multiple ways to install npm packages, each suited for different use cases:</p>
+
+    <table>
+      <tr>
+        <th>Method</th>
+        <th>Best for</th>
+      </tr>
+      <tr>
+        <td><code>container.npm.install('pkg')</code></td>
+        <td>Programmatic use — typed <code>InstallResult</code>, <code>onProgress</code> callback, <code>save</code>/<code>saveDev</code> options</td>
+      </tr>
+      <tr>
+        <td><code>container.npm.installFromPackageJson()</code></td>
+        <td>Install all dependencies from an existing <code>package.json</code></td>
+      </tr>
+      <tr>
+        <td><code>container.run('npm install pkg')</code></td>
+        <td>Shell workflows, interactive terminals, scripts</td>
+      </tr>
+    </table>
+
     <div class="callout">
       <div class="callout-title">Note</div>
-      <p><code>execSync()</code> is not supported in the browser — use the async <code>exec()</code> with callbacks or promises instead. The shell operates on the VirtualFS, not the real filesystem.</p>
+      <p><code>execSync()</code> is not supported in the browser — use the async <code>exec()</code> with callbacks, or the <code>container.run()</code> convenience method which returns a Promise. The shell operates on the VirtualFS, not the real filesystem.</p>
     </div>
 
     <h2>Convex Integration</h2>

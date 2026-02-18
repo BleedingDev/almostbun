@@ -511,6 +511,100 @@ describe('npm', () => {
       expect(pkgJson.version).toBe('1.0.0');
     });
 
+    it('should create bin stubs in /node_modules/.bin/ for packages with bin field', async () => {
+      const mockManifest = {
+        name: 'my-cli',
+        'dist-tags': { latest: '1.0.0' },
+        versions: {
+          '1.0.0': {
+            name: 'my-cli',
+            version: '1.0.0',
+            dist: {
+              tarball: 'https://registry.npmjs.org/my-cli/-/my-cli-1.0.0.tgz',
+              shasum: 'abc123',
+            },
+            dependencies: {},
+          },
+        },
+      };
+
+      const tarballContent = createMinimalTarball({
+        'package/package.json': '{"name":"my-cli","version":"1.0.0","bin":{"mycli":"bin/cli.js"}}',
+        'package/bin/cli.js': 'console.log("hello from cli");',
+      });
+      const compressedTarball = pako.gzip(tarballContent);
+
+      vi.spyOn(globalThis, 'fetch').mockImplementation(async (url) => {
+        const urlStr = url.toString();
+        if (urlStr.includes('registry.npmjs.org/my-cli') && !urlStr.includes('.tgz')) {
+          return new Response(JSON.stringify(mockManifest), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          });
+        }
+        if (urlStr.includes('.tgz')) {
+          return new Response(compressedTarball, { status: 200 });
+        }
+        return new Response('Not found', { status: 404 });
+      });
+
+      await pm.install('my-cli');
+
+      // Bin stub should exist
+      expect(vfs.existsSync('/node_modules/.bin/mycli')).toBe(true);
+
+      // Bin stub should be a bash script calling node with the entry point
+      const stubContent = vfs.readFileSync('/node_modules/.bin/mycli', 'utf8');
+      expect(stubContent).toContain('node');
+      expect(stubContent).toContain('/node_modules/my-cli/bin/cli.js');
+    });
+
+    it('should handle string bin field (command name = package name)', async () => {
+      const mockManifest = {
+        name: 'simple-tool',
+        'dist-tags': { latest: '1.0.0' },
+        versions: {
+          '1.0.0': {
+            name: 'simple-tool',
+            version: '1.0.0',
+            dist: {
+              tarball: 'https://registry.npmjs.org/simple-tool/-/simple-tool-1.0.0.tgz',
+              shasum: 'abc123',
+            },
+            dependencies: {},
+          },
+        },
+      };
+
+      const tarballContent = createMinimalTarball({
+        'package/package.json': '{"name":"simple-tool","version":"1.0.0","bin":"./index.js"}',
+        'package/index.js': 'console.log("simple");',
+      });
+      const compressedTarball = pako.gzip(tarballContent);
+
+      vi.spyOn(globalThis, 'fetch').mockImplementation(async (url) => {
+        const urlStr = url.toString();
+        if (urlStr.includes('registry.npmjs.org/simple-tool') && !urlStr.includes('.tgz')) {
+          return new Response(JSON.stringify(mockManifest), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          });
+        }
+        if (urlStr.includes('.tgz')) {
+          return new Response(compressedTarball, { status: 200 });
+        }
+        return new Response('Not found', { status: 404 });
+      });
+
+      await pm.install('simple-tool');
+
+      // Bin stub should use package name as command name
+      expect(vfs.existsSync('/node_modules/.bin/simple-tool')).toBe(true);
+      const stubContent = vfs.readFileSync('/node_modules/.bin/simple-tool', 'utf8');
+      expect(stubContent).toContain('node');
+      expect(stubContent).toContain('/node_modules/simple-tool/index.js');
+    });
+
     it('should resolve and install dependencies', async () => {
       const manifestA = {
         name: 'pkg-a',

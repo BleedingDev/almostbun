@@ -1,7 +1,7 @@
 import { defineConfig } from 'vite';
 import { resolve } from 'path';
 import wasm from 'vite-plugin-wasm';
-import topLevelAwait from 'vite-plugin-top-level-await';
+
 
 const isTest = process.env.VITEST === 'true';
 const ALLOWED_PROXY_HOSTS = new Set([
@@ -24,7 +24,6 @@ export default defineConfig({
   },
   plugins: isTest ? [] : [
     wasm(),
-    topLevelAwait(),
     {
       name: 'browser-shims',
       enforce: 'pre',
@@ -168,6 +167,7 @@ export default defineConfig({
     format: 'es',
   },
   build: {
+    target: 'esnext',
     commonjsOptions: {
       transformMixedEsModules: true,
     },
@@ -179,6 +179,10 @@ export default defineConfig({
         'examples/vite-demo': resolve(__dirname, 'examples/vite-demo.html'),
         'examples/express-demo': resolve(__dirname, 'examples/express-demo.html'),
         'examples/repo-runner': resolve(__dirname, 'examples/repo-runner.html'),
+        'examples/npm-scripts-demo': resolve(__dirname, 'examples/npm-scripts-demo.html'),
+        'examples/vitest-demo': resolve(__dirname, 'examples/vitest-demo.html'),
+        'examples/demo-convex-app': resolve(__dirname, 'examples/demo-convex-app.html'),
+        'examples/demo-vercel-ai-sdk': resolve(__dirname, 'examples/demo-vercel-ai-sdk.html'),
         'docs/index': resolve(__dirname, 'docs/index.html'),
         'docs/core-concepts': resolve(__dirname, 'docs/core-concepts.html'),
         'docs/nextjs-guide': resolve(__dirname, 'docs/nextjs-guide.html'),
@@ -187,6 +191,7 @@ export default defineConfig({
         'docs/api-reference': resolve(__dirname, 'docs/api-reference.html'),
         'docs/tutorial-editor': resolve(__dirname, 'docs/tutorial-editor.html'),
         'examples/editor-tutorial': resolve(__dirname, 'examples/editor-tutorial.html'),
+        'examples/agent-workbench': resolve(__dirname, 'examples/agent-workbench.html'),
       },
     },
     outDir: 'dist-site',

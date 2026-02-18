@@ -92,6 +92,23 @@ import { VirtualFS } from './virtual-fs';
 import { Runtime, RuntimeOptions } from './runtime';
 import { PackageManager } from './npm';
 import { ServerBridge, getServerBridge } from './server-bridge';
+import { exec as cpExec, setStreamingCallbacks, clearStreamingCallbacks, sendStdin } from './shims/child_process';
+
+export interface RunResult {
+  stdout: string;
+  stderr: string;
+  exitCode: number;
+}
+
+export interface RunOptions {
+  cwd?: string;
+  /** Callback for streaming stdout chunks as they arrive (for long-running commands like vitest watch) */
+  onStdout?: (data: string) => void;
+  /** Callback for streaming stderr chunks as they arrive */
+  onStderr?: (data: string) => void;
+  /** AbortSignal to cancel long-running commands */
+  signal?: AbortSignal;
+}
 
 export interface ContainerOptions extends RuntimeOptions {
   baseUrl?: string;
@@ -108,6 +125,8 @@ export function createContainer(options?: ContainerOptions): {
   serverBridge: ServerBridge;
   execute: (code: string, filename?: string) => { exports: unknown };
   runFile: (filename: string) => { exports: unknown };
+  run: (command: string, options?: RunOptions) => Promise<RunResult>;
+  sendInput: (data: string) => void;
   createREPL: () => { eval: (code: string) => unknown };
   on: (event: string, listener: (...args: unknown[]) => void) => void;
 } {
@@ -126,6 +145,34 @@ export function createContainer(options?: ContainerOptions): {
     serverBridge,
     execute: (code: string, filename?: string) => runtime.execute(code, filename),
     runFile: (filename: string) => runtime.runFile(filename),
+    run: (command: string, runOptions?: RunOptions): Promise<RunResult> => {
+      // If signal is already aborted, resolve immediately
+      if (runOptions?.signal?.aborted) {
+        return Promise.resolve({ stdout: '', stderr: '', exitCode: 130 });
+      }
+
+      // Set streaming callbacks for long-running commands (e.g. vitest watch)
+      const hasStreaming = runOptions?.onStdout || runOptions?.onStderr || runOptions?.signal;
+      if (hasStreaming) {
+        setStreamingCallbacks({
+          onStdout: runOptions?.onStdout,
+          onStderr: runOptions?.onStderr,
+          signal: runOptions?.signal,
+        });
+      }
+
+      return new Promise((resolve) => {
+        cpExec(command, { cwd: runOptions?.cwd }, (error, stdout, stderr) => {
+          if (hasStreaming) clearStreamingCallbacks();
+          resolve({
+            stdout: String(stdout),
+            stderr: String(stderr),
+            exitCode: error ? ((error as any).code ?? 1) : 0,
+          });
+        });
+      });
+    },
+    sendInput: (data: string) => sendStdin(data),
     createREPL: () => runtime.createREPL(),
     on: (event: string, listener: (...args: unknown[]) => void) => {
       serverBridge.on(event, listener);

@@ -322,6 +322,15 @@ export function debuglog(section: string): (...args: unknown[]) => void {
 // Alias for debuglog
 export const debug = debuglog;
 
+/**
+ * Strip ANSI escape codes / VT control characters from a string.
+ * Node.js 16.11+ API used by tinyrainbow, vitest, etc.
+ */
+export function stripVTControlCharacters(str: string): string {
+  // eslint-disable-next-line no-control-regex
+  return str.replace(/\x1B\[[0-9;]*[a-zA-Z]|\x1B\].*?(\x07|\x1B\\)|\x1B[()][A-Z0-9]|\x1B[#=]|\x1B./g, '');
+}
+
 export const types = {
   isArray,
   isBoolean,
@@ -354,6 +363,7 @@ export default {
   callbackify,
   debuglog,
   debug,
+  stripVTControlCharacters,
   isArray,
   isBoolean,
   isNull,

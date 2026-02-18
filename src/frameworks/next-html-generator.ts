@@ -12,6 +12,7 @@ import {
   REACT_REFRESH_PREAMBLE,
   HMR_CLIENT_SCRIPT,
 } from './next-shims';
+import { REACT_CDN, REACT_DOM_CDN } from '../config/cdn';
 
 /** Resolved App Router route with page, layouts, and UI convention files */
 export interface AppRoute {
@@ -29,6 +30,8 @@ export interface HtmlGeneratorContext {
   exists: (path: string) => boolean;
   generateEnvScript: () => string;
   loadTailwindConfigIfNeeded: () => Promise<string>;
+  /** Additional import map entries (e.g., framework-specific CDN mappings) */
+  additionalImportMap?: Record<string, string>;
 }
 
 /**
@@ -51,23 +54,17 @@ export async function generateAppRouterHtml(
     }
   }
 
-  // Build the nested component structure
-  // Layouts wrap the page from outside in
-  const pageModulePath = virtualPrefix + route.page; // route.page already starts with /
-  const layoutImports = route.layouts
-    .map((layout, i) => `import Layout${i} from '${virtualPrefix}${layout}';`)
-    .join('\n    ');
-
   // Build convention file paths for the inline script
   const loadingModulePath = route.loading ? `${virtualPrefix}${route.loading}` : '';
   const errorModulePath = route.error ? `${virtualPrefix}${route.error}` : '';
   const notFoundModulePath = route.notFound ? `${virtualPrefix}${route.notFound}` : '';
 
-  // Build nested JSX: Layout0 > Layout1 > ... > Page
-  let nestedJsx = 'React.createElement(Page)';
-  for (let i = route.layouts.length - 1; i >= 0; i--) {
-    nestedJsx = `React.createElement(Layout${i}, null, ${nestedJsx})`;
-  }
+  // Build additional import map entries from context
+  const additionalImportMapEntries = ctx.additionalImportMap
+    ? Object.entries(ctx.additionalImportMap)
+        .map(([key, value]) => `\n      "${key}": "${value}",`)
+        .join('')
+    : '';
 
   // Generate env script for NEXT_PUBLIC_* variables
   const envScript = ctx.generateEnvScript();
@@ -90,18 +87,11 @@ export async function generateAppRouterHtml(
   <script type="importmap">
   {
     "imports": {
-      "react": "https://esm.sh/react@18.2.0?dev",
-      "react/": "https://esm.sh/react@18.2.0&dev/",
-      "react-dom": "https://esm.sh/react-dom@18.2.0?dev",
-      "react-dom/": "https://esm.sh/react-dom@18.2.0&dev/",
-      "react-dom/client": "https://esm.sh/react-dom@18.2.0/client?dev",
-      "convex/react": "https://esm.sh/convex@1.21.0/react?external=react",
-      "convex/server": "https://esm.sh/convex@1.21.0/server",
-      "convex/values": "https://esm.sh/convex@1.21.0/values",
-      "convex/_generated/api": "${virtualPrefix}/convex/_generated/api.ts",
-      "ai": "https://esm.sh/ai@4?external=react",
-      "ai/react": "https://esm.sh/ai@4/react?external=react",
-      "@ai-sdk/openai": "https://esm.sh/@ai-sdk/openai@1",
+      "react": "${REACT_CDN}?dev",
+      "react/": "${REACT_CDN}&dev/",
+      "react-dom": "${REACT_DOM_CDN}?dev",
+      "react-dom/": "${REACT_DOM_CDN}&dev/",
+      "react-dom/client": "${REACT_DOM_CDN}/client?dev",${additionalImportMapEntries}
       "next/link": "${virtualPrefix}/_next/shims/link.js",
       "next/router": "${virtualPrefix}/_next/shims/router.js",
       "next/head": "${virtualPrefix}/_next/shims/head.js",
@@ -137,71 +127,45 @@ export async function generateAppRouterHtml(
     const errorModulePath = '${errorModulePath}';
     const notFoundModulePath = '${notFoundModulePath}';
 
-    // Route params cache for client-side navigation
-    const routeParamsCache = new Map();
-    routeParamsCache.set(initialPathname, initialRouteParams);
+    // Route info cache: pathname -> Promise<{ found, params, page, layouts }>
+    // Uses promise-based caching to deduplicate concurrent requests
+    const routeInfoCache = new Map();
 
-    // Extract route params from server for client-side navigation
-    async function extractRouteParams(pathname) {
-      // Strip virtual base if present
+    // Pre-seed cache with server-resolved initial route data
+    routeInfoCache.set(initialPathname, Promise.resolve({
+      found: true,
+      params: initialRouteParams,
+      page: '${route.page}',
+      layouts: ${JSON.stringify(route.layouts)},
+    }));
+
+    // Resolve route via server — handles route groups, dynamic segments, catch-all, etc.
+    function resolveRoute(pathname) {
       let route = pathname;
       if (route.startsWith(virtualBase)) {
         route = route.slice(virtualBase.length);
       }
       route = route.replace(/^\\/+/, '/') || '/';
 
-      // Check cache first
-      if (routeParamsCache.has(route)) {
-        return routeParamsCache.get(route);
+      if (!routeInfoCache.has(route)) {
+        routeInfoCache.set(route,
+          fetch(virtualBase + '/_next/route-info?pathname=' + encodeURIComponent(route))
+            .then(r => r.json())
+            .catch(e => {
+              console.error('[Router] Failed to resolve route:', e);
+              routeInfoCache.delete(route);
+              return { found: false, params: {}, page: null, layouts: [] };
+            })
+        );
       }
-
-      try {
-        const response = await fetch(virtualBase + '/_next/route-info?pathname=' + encodeURIComponent(route));
-        const info = await response.json();
-        routeParamsCache.set(route, info.params || {});
-        return info.params || {};
-      } catch (e) {
-        console.error('[Router] Failed to extract route params:', e);
-        return {};
-      }
-    }
-
-    // Convert URL path to app router page module path
-    function getAppPageModulePath(pathname) {
-      let route = pathname;
-      if (route.startsWith(virtualBase)) {
-        route = route.slice(virtualBase.length);
-      }
-      route = route.replace(/^\\/+/, '/') || '/';
-      // App Router: / -> /app/page, /about -> /app/about/page
-      const pagePath = route === '/' ? '/app/page' : '/app' + route + '/page';
-      return virtualBase + '/_next/app' + pagePath + '.js';
-    }
-
-    // Get layout paths for a route
-    function getLayoutPaths(pathname) {
-      let route = pathname;
-      if (route.startsWith(virtualBase)) {
-        route = route.slice(virtualBase.length);
-      }
-      route = route.replace(/^\\/+/, '/') || '/';
-
-      // Build layout paths from root to current route
-      const layouts = [virtualBase + '/_next/app/app/layout.js'];
-      if (route !== '/') {
-        const segments = route.split('/').filter(Boolean);
-        let currentPath = '/app';
-        for (const segment of segments) {
-          currentPath += '/' + segment;
-          layouts.push(virtualBase + '/_next/app' + currentPath + '/layout.js');
-        }
-      }
-      return layouts;
+      return routeInfoCache.get(route);
     }
 
     // Dynamic page loader with retry (SW may need time to recover after idle termination)
     async function loadPage(pathname) {
-      const modulePath = getAppPageModulePath(pathname);
+      const info = await resolveRoute(pathname);
+      if (!info.found || !info.page) return null;
+      const modulePath = virtualBase + '/_next/app' + info.page;
       for (let attempt = 0; attempt < 3; attempt++) {
         try {
           const module = await import(/* @vite-ignore */ modulePath + (attempt > 0 ? '?retry=' + attempt : ''));
@@ -218,7 +182,8 @@ export async function generateAppRouterHtml(
     // Load layouts (with caching)
     const layoutCache = new Map();
     async function loadLayouts(pathname) {
-      const layoutPaths = getLayoutPaths(pathname);
+      const info = await resolveRoute(pathname);
+      const layoutPaths = (info.layouts || []).map(l => virtualBase + '/_next/app' + l);
       const layouts = [];
       for (const path of layoutPaths) {
         if (layoutCache.has(path)) {
@@ -309,8 +274,8 @@ export async function generateAppRouterHtml(
       React.useEffect(() => {
         // Update route params when pathname changes
         let cancelled = false;
-        extractRouteParams(pathname).then(routeParams => {
-          if (!cancelled) setParams(Promise.resolve(routeParams));
+        resolveRoute(pathname).then(info => {
+          if (!cancelled) setParams(Promise.resolve(info.params || {}));
         });
         return () => { cancelled = true; };
       }, [pathname]);
@@ -366,8 +331,8 @@ export async function generateAppRouterHtml(
           if (newPath !== path) {
             console.log('[Router] Path changed, loading new page...');
             setPath(newPath);
-            const [P, L, routeParams] = await Promise.all([loadPage(newPath), loadLayouts(newPath), extractRouteParams(newPath)]);
-            window.__NEXT_ROUTE_PARAMS__ = routeParams;
+            const [P, L, routeInfo] = await Promise.all([loadPage(newPath), loadLayouts(newPath), resolveRoute(newPath)]);
+            window.__NEXT_ROUTE_PARAMS__ = routeInfo.params || {};
             console.log('[Router] Page loaded:', !!P, 'Layouts:', L.length);
             if (P) setPage(() => P);
             setLayouts(L);
@@ -445,6 +410,13 @@ export async function generatePageHtml(
   // Load Tailwind config if available (must be injected BEFORE CDN script)
   const tailwindConfigScript = await ctx.loadTailwindConfigIfNeeded();
 
+  // Build additional import map entries from context
+  const pagesAdditionalEntries = ctx.additionalImportMap
+    ? Object.entries(ctx.additionalImportMap)
+        .map(([key, value]) => `\n      "${key}": "${value}",`)
+        .join('')
+    : '';
+
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -460,11 +432,11 @@ export async function generatePageHtml(
   <script type="importmap">
   {
     "imports": {
-      "react": "https://esm.sh/react@18.2.0?dev",
-      "react/": "https://esm.sh/react@18.2.0&dev/",
-      "react-dom": "https://esm.sh/react-dom@18.2.0?dev",
-      "react-dom/": "https://esm.sh/react-dom@18.2.0&dev/",
-      "react-dom/client": "https://esm.sh/react-dom@18.2.0/client?dev",
+      "react": "${REACT_CDN}?dev",
+      "react/": "${REACT_CDN}&dev/",
+      "react-dom": "${REACT_DOM_CDN}?dev",
+      "react-dom/": "${REACT_DOM_CDN}&dev/",
+      "react-dom/client": "${REACT_DOM_CDN}/client?dev",${pagesAdditionalEntries}
       "next/link": "${virtualPrefix}/_next/shims/link.js",
       "next/router": "${virtualPrefix}/_next/shims/router.js",
       "next/head": "${virtualPrefix}/_next/shims/head.js",

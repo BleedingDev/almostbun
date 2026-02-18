@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import { defineConfig } from '@playwright/test';
 
 const PLAYWRIGHT_WEB_SERVER_PORT = Math.max(1, Number(process.env.PLAYWRIGHT_WEB_SERVER_PORT || 5173));
@@ -18,12 +19,20 @@ export default defineConfig({
     screenshot: 'only-on-failure',
     trace: 'on-first-retry',
   },
-  webServer: {
-    command: `npm run dev -- --host ${PLAYWRIGHT_WEB_SERVER_HOST} --port ${PLAYWRIGHT_WEB_SERVER_PORT}`,
-    url: `${PLAYWRIGHT_BASE_URL}/examples/vite-demo.html`,
-    reuseExistingServer: !process.env.CI,
-    timeout: PLAYWRIGHT_WEB_SERVER_TIMEOUT_MS,
-  },
+  webServer: [
+    {
+      command: `npm run dev -- --host ${PLAYWRIGHT_WEB_SERVER_HOST} --port ${PLAYWRIGHT_WEB_SERVER_PORT}`,
+      url: `${PLAYWRIGHT_BASE_URL}/examples/vite-demo.html`,
+      reuseExistingServer: !process.env.CI,
+      timeout: PLAYWRIGHT_WEB_SERVER_TIMEOUT_MS,
+    },
+    {
+      command: 'node e2e/cors-proxy-server.mjs',
+      url: 'http://localhost:8787',
+      reuseExistingServer: !process.env.CI,
+      timeout: 10000,
+    },
+  ],
   projects: [
     {
       name: 'chromium',

@@ -1,5 +1,9 @@
 /**
  * Type declarations for CDN-loaded modules
+ *
+ * Dynamic imports use variable URLs from src/config/cdn.ts, so we declare
+ * types on the base module names. TypeScript resolves them via the
+ * `esbuild-wasm` and `@rollup/browser` module declarations below.
  */
 
 // Type declarations for esbuild-wasm to support dynamic import from CDN
@@ -127,7 +131,6 @@ declare module 'bun:jsc' {
   const defaultExport: Record<string, any>;
   export default defaultExport;
 }
-
 // Centralized Window interface augmentation for esbuild
 interface Window {
   __esbuild?: typeof import('esbuild-wasm');

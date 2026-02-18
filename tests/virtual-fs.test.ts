@@ -84,6 +84,26 @@ describe('VirtualFS', () => {
     it('should throw for non-existent path', () => {
       expect(() => vfs.statSync('/nonexistent')).toThrow('ENOENT');
     });
+
+    it('should return correct byte size for ASCII content', () => {
+      vfs.writeFileSync('/ascii.txt', 'hello');
+      const stats = vfs.statSync('/ascii.txt');
+      expect(stats.size).toBe(5);
+    });
+
+    it('should return correct byte size for multi-byte UTF-8', () => {
+      // "café" = 5 chars but 6 bytes in UTF-8 (é is 2 bytes)
+      vfs.writeFileSync('/utf8.txt', 'café');
+      const stats = vfs.statSync('/utf8.txt');
+      expect(stats.size).toBe(5); // 'c' + 'a' + 'f' + 'é'(2 bytes) = 5 bytes
+    });
+
+    it('should return correct byte size for Uint8Array content', () => {
+      const data = new Uint8Array([0x00, 0x01, 0x02, 0xff]);
+      vfs.writeFileSync('/binary.bin', data);
+      const stats = vfs.statSync('/binary.bin');
+      expect(stats.size).toBe(4);
+    });
   });
 
   describe('symlinks', () => {

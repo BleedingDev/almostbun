@@ -70,160 +70,134 @@ import {
   getNativeFallbackForResolvedPath,
   getNativeFallbackForSpecifier,
 } from './native-fallbacks';
-import { resolve as resolveExports } from 'resolve.exports';
+import { resolve as resolveExports, imports as resolveImports } from 'resolve.exports';
+import { transformEsmToCjsSimple } from './frameworks/code-transforms';
+import * as acorn from 'acorn';
+
+/**
+ * Walk an acorn AST recursively, calling the callback for every node.
+ */
+function walkAst(node: any, callback: (node: any) => void): void {
+  if (!node || typeof node !== 'object') return;
+  if (typeof node.type === 'string') {
+    callback(node);
+  }
+  for (const key of Object.keys(node)) {
+    if (key === 'type' || key === 'start' || key === 'end' || key === 'loc' || key === 'range') continue;
+    const child = node[key];
+    if (child && typeof child === 'object') {
+      if (Array.isArray(child)) {
+        for (const item of child) {
+          if (item && typeof item === 'object' && typeof item.type === 'string') {
+            walkAst(item, callback);
+          }
+        }
+      } else if (typeof child.type === 'string') {
+        walkAst(child, callback);
+      }
+    }
+  }
+}
 
 /**
  * Transform dynamic imports in code: import('x') -> __dynamicImport('x')
- * This allows dynamic imports to work in our eval-based runtime
+ * Regex-based fallback for when AST parsing fails.
  */
-function transformDynamicImports(code: string): string {
-  // Use a regex that matches import( but not things like:
-  // - "import(" in strings
-  // - // import( in comments
-  // This is a simple approach that works for most bundled code
-  // For a more robust solution, we'd need a proper parser
-
-  // Match: import( with optional whitespace, not preceded by word char or $
-  // This handles: import('x'), import ("x"), await import('x'), etc.
+function transformDynamicImportsRegex(code: string): string {
   return code.replace(/(?<![.$\w])import\s*\(/g, '__dynamicImport(');
 }
 
 /**
- * Simple synchronous ESM to CJS transform
- * Handles basic import/export syntax without needing esbuild
+ * All-in-one ESM to CJS transform using AST.
+ * Handles import/export declarations, import.meta, and dynamic imports in a single pass.
+ * Falls back to regex-based transforms if acorn can't parse the code.
  */
 function transformEsmToCjs(code: string, filename: string): string {
-  // Check if code has ESM syntax
-  const hasImport = /\bimport\s+[\w{*'"]/m.test(code);
-  const hasExport = /\bexport\s+(?:default|const|let|var|async\s+function|function|class|{|\*)/m.test(code);
-  const hasImportMeta = /\bimport\.meta\b/.test(code);
+  // Quick check: does the code have any ESM-like patterns?
+  const maybeEsm = /\bimport\b|\bexport\b|\bimport\.meta\b/.test(code);
+  if (!maybeEsm) return code;
 
-  if (!hasImport && !hasExport && !hasImportMeta) {
-    return code; // Already CJS or no module syntax
+  try {
+    return transformEsmToCjsAst(code, filename);
+  } catch {
+    // Acorn can't parse — fall back to regex transforms
+    return transformEsmToCjsRegexFallback(code, filename);
+  }
+}
+
+/**
+ * AST-based ESM to CJS transform. Parses once with acorn, then:
+ * 1. Replaces import.meta with import_meta (the wrapper-provided variable)
+ * 2. Replaces dynamic import() with __dynamicImport()
+ * 3. Transforms import/export declarations to require/exports
+ *
+ * Steps 1 & 2 use a deep AST walk (handles nodes inside functions/classes).
+ * Step 3 re-parses the modified code via transformEsmToCjsSimple.
+ */
+function transformEsmToCjsAst(code: string, filename: string): string {
+  const ast = acorn.parse(code, { ecmaVersion: 'latest', sourceType: 'module' }) as any;
+
+  // Collect deep replacements: import.meta → import_meta, import() → __dynamicImport()
+  const deepReplacements: Array<[number, number, string]> = [];
+
+  walkAst(ast, (node: any) => {
+    // import.meta → import_meta (variable provided by module wrapper)
+    if (node.type === 'MetaProperty' && node.meta?.name === 'import' && node.property?.name === 'meta') {
+      deepReplacements.push([node.start, node.end, 'import_meta']);
+    }
+    // import('x') → __dynamicImport('x')
+    if (node.type === 'ImportExpression') {
+      // Replace just the 'import' keyword, preserving the (...) part
+      deepReplacements.push([node.start, node.start + 6, '__dynamicImport']);
+    }
+  });
+
+  // Check for actual import/export declarations
+  const hasImportDecl = ast.body.some((n: any) => n.type === 'ImportDeclaration');
+  const hasExportDecl = ast.body.some((n: any) => n.type?.startsWith('Export'));
+
+  // Apply deep replacements from end to start (preserves earlier positions)
+  let transformed = code;
+  deepReplacements.sort((a, b) => b[0] - a[0]);
+  for (const [start, end, replacement] of deepReplacements) {
+    transformed = transformed.slice(0, start) + replacement + transformed.slice(end);
   }
 
-  let transformed = code;
-  const namedDeclarationExports = new Set<string>();
-  let reExportCounter = 0;
+  // Transform import/export declarations (re-parses the modified code)
+  if (hasImportDecl || hasExportDecl) {
+    transformed = transformEsmToCjsSimple(transformed);
 
-  // Transform import.meta.url to a file:// URL
+    if (hasExportDecl) {
+      transformed = 'Object.defineProperty(exports, "__esModule", { value: true });\n' + transformed;
+    }
+  }
+
+  return transformed;
+}
+
+/**
+ * Regex-based fallback for ESM to CJS transform (when acorn can't parse).
+ */
+function transformEsmToCjsRegexFallback(code: string, filename: string): string {
+  let transformed = code;
+
+  // Replace import.meta (regex — may match in strings, but this is the fallback)
   transformed = transformed.replace(/\bimport\.meta\.url\b/g, `"file://${filename}"`);
   transformed = transformed.replace(/\bimport\.meta\.dirname\b/g, `"${pathShim.dirname(filename)}"`);
   transformed = transformed.replace(/\bimport\.meta\.filename\b/g, `"${filename}"`);
   transformed = transformed.replace(/\bimport\.meta\b/g, `({ url: "file://${filename}", dirname: "${pathShim.dirname(filename)}", filename: "${filename}" })`);
 
-  // Transform named imports: import { a, b } from 'x' -> const { a, b } = require('x')
-  transformed = transformed.replace(
-    /\bimport\s+\{([^}]+)\}\s+from\s+['"]([^'"]+)['"]\s*;?/g,
-    (_, imports, module) => {
-      const cleanImports = imports.replace(/\s+as\s+/g, ': ');
-      return `const {${cleanImports}} = require("${module}");`;
+  // Replace dynamic imports
+  transformed = transformDynamicImportsRegex(transformed);
+
+  // Transform import/export (AST with its own regex fallback)
+  const hasImport = /\bimport\s+[\w{*'"]/m.test(code);
+  const hasExport = /\bexport\s+(?:default|const|let|var|function|class|{|\*)/m.test(code);
+  if (hasImport || hasExport) {
+    transformed = transformEsmToCjsSimple(transformed);
+    if (hasExport) {
+      transformed = 'Object.defineProperty(exports, "__esModule", { value: true });\n' + transformed;
     }
-  );
-
-  // Transform default imports: import x from 'y' -> const x = require('y').default || require('y')
-  transformed = transformed.replace(
-    /\bimport\s+(\w+)\s+from\s+['"]([^'"]+)['"]\s*;?/g,
-    (_, name, module) => {
-      return `const ${name} = (function() { const m = require("${module}"); return m && m.__esModule ? m.default : m; })();`;
-    }
-  );
-
-  // Transform namespace imports: import * as x from 'y' -> const x = require('y')
-  transformed = transformed.replace(
-    /\bimport\s+\*\s+as\s+(\w+)\s+from\s+['"]([^'"]+)['"]\s*;?/g,
-    'const $1 = require("$2");'
-  );
-
-  // Transform side-effect imports: import 'x' -> require('x')
-  transformed = transformed.replace(
-    /\bimport\s+['"]([^'"]+)['"]\s*;?/g,
-    'require("$1");'
-  );
-
-  // Transform export default: export default x -> module.exports.default = x; module.exports = x
-  transformed = transformed.replace(
-    /\bexport\s+default\s+/g,
-    'module.exports = module.exports.default = '
-  );
-
-  // Transform export * from: export * from 'x' -> Object.assign(module.exports, require('x'))
-  transformed = transformed.replace(
-    /\bexport\s+\*\s+from\s+['"]([^'"]+)['"]\s*;?/g,
-    (_, module) => `Object.assign(module.exports, require("${module}"));`
-  );
-
-  // Transform re-export lists: export { a as b } from 'x'
-  transformed = transformed.replace(
-    /\bexport\s+\{([^}]+)\}\s+from\s+['"]([^'"]+)['"]\s*;?/g,
-    (_, exports, module) => {
-      const tempVar = `__reexport_${reExportCounter++}`;
-      const lines = [`const ${tempVar} = require("${module}");`];
-      for (const item of exports.split(',')) {
-        const [local, exported] = item.trim().split(/\s+as\s+/);
-        const localName = local.trim();
-        const exportName = (exported || local).trim();
-        lines.push(`module.exports.${exportName} = ${tempVar}.${localName};`);
-      }
-      return lines.join('\n');
-    }
-  );
-
-  // Transform named exports: export { a, b } -> module.exports.a = a; module.exports.b = b
-  transformed = transformed.replace(
-    /\bexport\s+\{([^}]+)\}\s*;?/g,
-    (_, exports) => {
-      const items = exports.split(',').map((item: string) => {
-        const [local, exported] = item.trim().split(/\s+as\s+/);
-        const exportName = exported || local;
-        return `module.exports.${exportName.trim()} = ${local.trim()};`;
-      });
-      return items.join('\n');
-    }
-  );
-
-  // Transform export const/let/var: export const x = 1 -> const x = 1; module.exports.x = x
-  transformed = transformed.replace(
-    /\bexport\s+(const|let|var)\s+(\w+)\s*=/g,
-    '$1 $2 = module.exports.$2 ='
-  );
-
-  // Transform export async function: export async function x() {} -> async function x() {}
-  transformed = transformed.replace(
-    /\bexport\s+async\s+function\s+(\w+)/g,
-    (_, name) => {
-      namedDeclarationExports.add(name);
-      return `async function ${name}`;
-    }
-  );
-
-  // Transform export function: export function x() {} -> function x() {} module.exports.x = x
-  transformed = transformed.replace(
-    /\bexport\s+function\s+(\w+)/g,
-    (_, name) => {
-      namedDeclarationExports.add(name);
-      return `function ${name}`;
-    }
-  );
-
-  // Transform export class: export class X {} -> class X {} module.exports.X = X
-  transformed = transformed.replace(
-    /\bexport\s+class\s+(\w+)/g,
-    (_, name) => {
-      namedDeclarationExports.add(name);
-      return `class ${name}`;
-    }
-  );
-
-  if (namedDeclarationExports.size > 0) {
-    transformed += `\n${Array.from(namedDeclarationExports)
-      .map((name) => `module.exports.${name} = ${name};`)
-      .join('\n')}`;
-  }
-
-  // Mark as ES module for interop
-  if (hasExport) {
-    transformed = 'Object.defineProperty(exports, "__esModule", { value: true });\n' + transformed;
   }
 
   return transformed;
@@ -271,6 +245,8 @@ export interface RuntimeOptions {
   argv?: string[];
   onConsole?: (method: string, args: unknown[]) => void;
   onTrace?: (event: RuntimeTraceEvent) => void;
+  onStdout?: (data: string) => void;
+  onStderr?: (data: string) => void;
 }
 
 export interface RuntimeTraceEvent {
@@ -425,8 +401,55 @@ const builtinModules: Record<string, unknown> = {
   wasi: wasiShim,
   // prettier uses createRequire which doesn't work in our runtime, so we shim it
   prettier: prettierShim,
-  // Some packages explicitly require 'console'
-  console: console,
+  // Some packages explicitly require 'console' (with Console constructor)
+  console: {
+    ...console,
+    Console: class Console {
+      private _stdout: { write: (s: string) => void } | null;
+      private _stderr: { write: (s: string) => void } | null;
+      constructor(options?: unknown) {
+        // Node's Console accepts (stdout, stderr) or { stdout, stderr }
+        const opts = options as Record<string, unknown> | undefined;
+        if (opts && typeof opts === 'object' && 'write' in opts) {
+          // new Console(stdout, stderr) — first arg is stdout stream
+          this._stdout = opts as unknown as { write: (s: string) => void };
+          this._stderr = (arguments[1] as { write: (s: string) => void }) || this._stdout;
+        } else if (opts && typeof opts === 'object' && 'stdout' in opts) {
+          // new Console({ stdout, stderr })
+          this._stdout = opts.stdout as { write: (s: string) => void } || null;
+          this._stderr = (opts.stderr as { write: (s: string) => void }) || this._stdout;
+        } else {
+          this._stdout = null;
+          this._stderr = null;
+        }
+      }
+      private _write(stream: 'out' | 'err', args: unknown[]) {
+        const msg = args.map(a => typeof a === 'string' ? a : JSON.stringify(a)).join(' ') + '\n';
+        const target = stream === 'err' ? this._stderr : this._stdout;
+        if (target) target.write(msg);
+        else if (stream === 'err') console.error(...args);
+        else console.log(...args);
+      }
+      log(...args: unknown[]) { this._write('out', args); }
+      error(...args: unknown[]) { this._write('err', args); }
+      warn(...args: unknown[]) { this._write('err', args); }
+      info(...args: unknown[]) { this._write('out', args); }
+      debug(...args: unknown[]) { this._write('out', args); }
+      trace(...args: unknown[]) { this._write('err', args); }
+      dir(obj: unknown) { this._write('out', [obj]); }
+      time(_label?: string) {}
+      timeEnd(_label?: string) {}
+      timeLog(_label?: string) {}
+      assert(value: unknown, ...args: unknown[]) { if (!value) this._write('err', ['Assertion failed:', ...args]); }
+      clear() {}
+      count(_label?: string) {}
+      countReset(_label?: string) {}
+      group(..._args: unknown[]) {}
+      groupCollapsed(..._args: unknown[]) {}
+      groupEnd() {}
+      table(data: unknown) { this._write('out', [data]); }
+    },
+  },
   // util/types is accessed as a subpath
   'util/types': utilShim.types,
   // Sentry SDK (no-op since error tracking isn't useful in browser runtime)
@@ -443,6 +466,16 @@ const builtinModules: Record<string, unknown> = {
   // Modern.js Effect BFF
   '@modern-js/plugin-bff/effect-client': modernJsEffectClientShim,
   '@modern-js/plugin-bff/effect-server': modernJsEffectServerShim,
+  // path subpaths (our path shim is already POSIX-based)
+  'path/posix': pathShim,
+  'path/win32': pathShim.win32,
+  // timers subpaths
+  'timers/promises': {
+    setTimeout: (ms: number) => new Promise(resolve => setTimeout(resolve, ms)),
+    setInterval: globalThis.setInterval,
+    setImmediate: (value?: unknown) => new Promise(resolve => setTimeout(() => resolve(value), 0)),
+    scheduler: { wait: (ms: number) => new Promise(resolve => setTimeout(resolve, ms)) },
+  },
 };
 
 /**
@@ -832,6 +865,28 @@ function createRequire(
       return id;
     }
 
+    // Package imports: #something resolves via nearest package.json "imports" field
+    if (id.startsWith('#')) {
+      let searchDir = fromDir;
+      while (searchDir !== '/') {
+        const pkgPath = pathShim.join(searchDir, 'package.json');
+        const pkg = getParsedPackageJson(pkgPath);
+        if (pkg?.imports) {
+          try {
+            const resolved = resolveImports(pkg, id, { require: true });
+            if (resolved && resolved.length > 0) {
+              const fullPath = pathShim.join(searchDir, resolved[0]);
+              if (vfs.existsSync(fullPath)) return fullPath;
+            }
+          } catch {
+            // resolveImports throws if no match found
+          }
+        }
+        searchDir = pathShim.dirname(searchDir);
+      }
+      throw new Error(`Cannot find module '${id}'`);
+    }
+
     // Check resolution cache
     const cacheKey = `${fromDir}|${id}`;
     const cached = resolutionCache.get(cacheKey);
@@ -1160,9 +1215,21 @@ function createRequire(
           const exportResolved = tryResolveFromPackageExports(pkg, pkgRoot, pkgName, moduleId);
           if (exportResolved) return exportResolved;
 
-          // If this is the package root (no sub-path), use main/module entry.
+          // If this is the package root (no sub-path), use browser/main/module entry.
           if (pkgName === moduleId) {
-            const main = pkg.main || pkg.module || 'index.js';
+            let main: string | undefined;
+            if (typeof pkg.browser === 'string') {
+              main = pkg.browser;
+            }
+            if (!main && pkg.main) {
+              main = pkg.main;
+            }
+            if (!main && pkg.module) {
+              main = pkg.module;
+            }
+            if (!main) {
+              main = 'index.js';
+            }
             const mainPath = pathShim.join(pkgRoot, main);
             const resolvedMain = tryResolveFile(mainPath);
             if (resolvedMain) {
@@ -1170,18 +1237,15 @@ function createRequire(
               if (remapped) return remapped;
             }
           }
-        }
 
-        // Resolve sub-path directly from package root when exports are absent/incomplete.
-        if (moduleId !== pkgName && moduleId.startsWith(`${pkgName}/`)) {
-          const subPath = moduleId.slice(pkgName.length + 1);
-          const resolvedSubPath = tryResolveFile(pathShim.join(pkgRoot, subPath));
-          if (resolvedSubPath) {
-            if (pkg) {
+          // Resolve sub-path directly from package root when exports are absent/incomplete.
+          if (moduleId !== pkgName && moduleId.startsWith(`${pkgName}/`)) {
+            const subPath = moduleId.slice(pkgName.length + 1);
+            const resolvedSubPath = tryResolveFile(pathShim.join(pkgRoot, subPath));
+            if (resolvedSubPath) {
               const remapped = applyBrowserFieldRemap(resolvedSubPath, pkg, pkgRoot);
               if (remapped) return remapped;
             }
-            return resolvedSubPath;
           }
         }
       }
@@ -1385,10 +1449,6 @@ function createRequire(
         }
       }
 
-      // Transform dynamic imports: import('x') -> __dynamicImport('x')
-      // This allows dynamic imports to work in our eval-based runtime
-      code = transformDynamicImports(code);
-
       // Cache the processed code
       processedCodeCache?.set(codeCacheKey, code);
     }
@@ -1442,9 +1502,8 @@ ${code}
       try {
         fn = eval(wrappedCode);
       } catch (evalError) {
-        console.error('[runtime] Eval failed for:', resolvedPath);
-        console.error('[runtime] First 500 chars of code:', code.substring(0, 500));
-        throw evalError;
+        const msg = evalError instanceof Error ? evalError.message : String(evalError);
+        throw new SyntaxError(`${msg} (in ${resolvedPath})`);
       }
       // Create dynamic import function for this module context
       const dynamicImport = createDynamicImport(moduleRequire);
@@ -1480,8 +1539,9 @@ ${code}
     } catch (error) {
       // Remove from cache on error
       delete moduleCache[resolvedPath];
-      if (error instanceof Error && !error.message.includes('[while loading')) {
-        error.message = `${error.message} [while loading ${resolvedPath}]`;
+      // Enhance runtime errors with the module path for easier debugging
+      if (error instanceof Error && !error.message.includes(`(in ${resolvedPath})`) && !error.message.includes('[while loading')) {
+        error.message = `${error.message} (in ${resolvedPath})`;
       }
       throw error;
     }
@@ -1829,11 +1889,6 @@ ${code}
     if (id === 'prettier' || id.startsWith('prettier/')) {
       return builtinModules['prettier'];
     }
-    // Intercept Sentry - SDK tries to monkey-patch http which doesn't work
-    if (id.startsWith('@sentry/')) {
-      return builtinModules['@sentry/node'];
-    }
-
     const resolved = resolveModule(id, currentDir);
 
     // If resolved to a built-in name (shouldn't happen but safety check)
@@ -2169,6 +2224,8 @@ export class Runtime {
       cwd: options.cwd || '/',
       env: options.env,
       argv: options.argv,
+      onStdout: options.onStdout,
+      onStderr: options.onStderr,
     });
     // Create fs shim with cwd getter for relative path resolution
     this.fsShim = createFsShim(vfs, () => this.process.cwd());
@@ -2185,6 +2242,30 @@ export class Runtime {
 
     // Initialize esbuild shim with VFS for file access
     esbuildShim.setVFS(vfs);
+
+    // Polyfill setImmediate/clearImmediate (Node.js globals not available in browsers)
+    if (typeof globalThis.setImmediate === 'undefined') {
+      (globalThis as any).setImmediate = (fn: (...args: unknown[]) => void, ...args: unknown[]) => setTimeout(fn, 0, ...args);
+      (globalThis as any).clearImmediate = (id: number) => clearTimeout(id);
+    }
+
+    // Patch setTimeout/setInterval to return Node.js-compatible Timeout objects
+    // Node.js timers return objects with .ref()/.unref()/.refresh()/.hasRef() methods
+    // Browser timers return plain numbers. Many npm packages (vitest, etc.) call .unref()
+    if (!(globalThis.setTimeout as any).__patched) {
+      const origSetTimeout = globalThis.setTimeout.bind(globalThis);
+      const origSetInterval = globalThis.setInterval.bind(globalThis);
+      const origClearTimeout = globalThis.clearTimeout.bind(globalThis);
+      const origClearInterval = globalThis.clearInterval.bind(globalThis);
+      const wrapTimer = (id: ReturnType<typeof origSetTimeout>) => {
+        const t = { _id: id, ref() { return t; }, unref() { return t; }, hasRef() { return true; }, refresh() { return t; }, [Symbol.toPrimitive]() { return id; } };
+        return t;
+      };
+      (globalThis as any).setTimeout = Object.assign((...args: Parameters<typeof origSetTimeout>) => wrapTimer(origSetTimeout(...args)), { __patched: true });
+      (globalThis as any).setInterval = Object.assign((...args: Parameters<typeof origSetInterval>) => wrapTimer(origSetInterval(...args)), { __patched: true });
+      (globalThis as any).clearTimeout = (t: any) => origClearTimeout(t?._id ?? t);
+      (globalThis as any).clearInterval = (t: any) => origClearInterval(t?._id ?? t);
+    }
 
     // Polyfill Error.captureStackTrace/prepareStackTrace for Safari/WebKit
     // (V8-specific API used by Express's depd and other npm packages)
@@ -2497,6 +2578,17 @@ export class Runtime {
     // Create console wrapper
     const consoleWrapper = createConsoleWrapper(this.options.onConsole);
 
+    // Transform code the same way loadModule does
+    // Strip shebang line if present (e.g. #!/usr/bin/env node)
+    if (code.startsWith('#!')) {
+      code = code.slice(code.indexOf('\n') + 1);
+    }
+
+    // Transform ESM to CJS if needed (AST-based, handles import.meta and dynamic imports too)
+    if (!filename.endsWith('.cjs')) {
+      code = transformEsmToCjs(code, filename);
+    }
+
     // Execute code
     // Use the same wrapper pattern as loadModule for consistency
     try {
@@ -2521,7 +2613,7 @@ global.Bun = $bun;
 
 return (function() {
 ${code}
-}).call(this);
+      }).call(this);
 })`;
 
       const fn = eval(wrappedCode);
@@ -2621,7 +2713,10 @@ ${code}
    * Clear the module cache
    */
   clearCache(): void {
-    this.moduleCache = {};
+    // Clear contents in-place so closures that captured the reference still see the cleared cache
+    for (const key of Object.keys(this.moduleCache)) {
+      delete this.moduleCache[key];
+    }
   }
 
   /**

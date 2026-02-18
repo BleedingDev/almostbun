@@ -142,6 +142,71 @@
         margin-bottom: 12px;
       }
       @keyframes spin { to { transform: rotate(360deg); } }
+      .setup-overlay {
+        position: absolute;
+        inset: 0;
+        background: rgba(0,0,0,0.85);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 10;
+      }
+      .setup-overlay.hidden { display: none; }
+      .setup-dialog {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        padding: 32px;
+        max-width: 420px;
+        width: 90%;
+      }
+      .setup-dialog h2 {
+        font-family: var(--mono);
+        font-size: 0.9rem;
+        color: var(--text-bright);
+        margin-bottom: 8px;
+      }
+      .setup-dialog p {
+        font-size: 0.8rem;
+        color: var(--text-dim);
+        line-height: 1.6;
+        margin-bottom: 16px;
+      }
+      .setup-dialog .privacy-note {
+        font-family: var(--mono);
+        font-size: 0.65rem;
+        color: var(--accent-dim);
+        background: var(--accent-bg);
+        border: 1px solid var(--accent-border);
+        padding: 8px 12px;
+        margin-bottom: 16px;
+        line-height: 1.5;
+      }
+      .setup-dialog input {
+        width: 100%;
+        padding: 10px 12px;
+        font-family: var(--mono);
+        font-size: 0.78rem;
+        border: 1px solid var(--border);
+        background: var(--black);
+        color: var(--text);
+        margin-bottom: 12px;
+      }
+      .setup-dialog input::placeholder { color: var(--text-dim); }
+      .setup-dialog button {
+        width: 100%;
+        padding: 10px;
+        font-family: var(--mono);
+        font-size: 0.78rem;
+        font-weight: 600;
+        background: var(--accent);
+        color: var(--black);
+        border: none;
+        cursor: pointer;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+      }
+      .setup-dialog button:hover { background: #00ffaa; }
+      .setup-dialog button:disabled { opacity: 0.4; cursor: not-allowed; }
       @media (max-width: 900px) {
         .layout { grid-template-columns: 1fr; }
         .file-tree-panel { display: none; }
@@ -160,7 +225,16 @@
       <span class="tag">next.js · convex · realtime</span>
     </div>
 
-    <div class="layout">
+    <div class="layout" style="position:relative;">
+      <div class="setup-overlay" id="setupOverlay">
+        <div class="setup-dialog">
+          <h2>Convex Deploy Key Required</h2>
+          <p>This demo deploys functions to Convex cloud and syncs data in real time. Enter your deploy key to get started.</p>
+          <div class="privacy-note">Your key stays in your browser. It is used directly to communicate with the Convex API — it is never sent to our servers.</div>
+          <input type="password" id="setupKeyInput" placeholder="dev:deployment-name|token" />
+          <button id="setupKeyBtn" disabled>Deploy</button>
+        </div>
+      </div>
       <!-- File Tree -->
       <div class="panel file-tree-panel">
         <div class="panel-header">

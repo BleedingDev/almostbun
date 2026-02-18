@@ -7,6 +7,7 @@
 import * as acorn from 'acorn';
 import * as csstree from 'css-tree';
 import { simpleHash } from '../utils/hash';
+import { REACT_CDN, REACT_DOM_CDN } from '../config/cdn';
 
 /**
  * Interface for file system operations needed by CSS module transforms.
@@ -176,11 +177,11 @@ export function stripCssImports(
 
 // Explicit mappings for common packages (ensures correct esm.sh URLs)
 const EXPLICIT_MAPPINGS: Record<string, string> = {
-  'react': 'https://esm.sh/react@18.2.0?dev',
-  'react/jsx-runtime': 'https://esm.sh/react@18.2.0&dev/jsx-runtime',
-  'react/jsx-dev-runtime': 'https://esm.sh/react@18.2.0&dev/jsx-dev-runtime',
-  'react-dom': 'https://esm.sh/react-dom@18.2.0?dev',
-  'react-dom/client': 'https://esm.sh/react-dom@18.2.0/client?dev',
+  'react': `${REACT_CDN}?dev`,
+  'react/jsx-runtime': `${REACT_CDN}&dev/jsx-runtime`,
+  'react/jsx-dev-runtime': `${REACT_CDN}&dev/jsx-dev-runtime`,
+  'react-dom': `${REACT_DOM_CDN}?dev`,
+  'react-dom/client': `${REACT_DOM_CDN}/client?dev`,
 };
 
 // Packages that are local, have custom shims, or are handled by the HTML import map.
@@ -188,14 +189,26 @@ const EXPLICIT_MAPPINGS: Record<string, string> = {
 const LOCAL_PACKAGES = new Set([
   'next/link', 'next/router', 'next/head', 'next/navigation',
   'next/dynamic', 'next/image', 'next/script', 'next/font/google',
-  'next/font/local', 'convex/_generated/api',
-  // Convex subpath imports — resolved by the import map in generated HTML
-  // (keeps version-pinned URLs consistent with import map)
-  'convex/react', 'convex/server', 'convex/values',
+  'next/font/local',
 ]);
 
+/**
+ * Extract the major version from a semver range string.
+ * e.g., "^4.0.0" → "4", "~1.2.3" → "1", ">=2.0.0" → "2", "3.1.0" → "3"
+ */
+function extractMajorVersion(range: string): string | null {
+  const match = range.match(/(\d+)\.\d+/);
+  return match ? match[1] : null;
+}
+
 /** Check if a package specifier is a bare npm import that should be redirected. */
-function resolveNpmPackage(packageName: string): string | null {
+function resolveNpmPackage(
+  packageName: string,
+  extraLocalPackages?: Set<string>,
+  dependencies?: Record<string, string>,
+  esmShDeps?: string,
+  installedPackages?: Set<string>,
+): string | null {
   // Skip relative, absolute, URL, and virtual paths
   if (packageName.startsWith('.') || packageName.startsWith('/') ||
       packageName.startsWith('http://') || packageName.startsWith('https://') ||
@@ -205,8 +218,9 @@ function resolveNpmPackage(packageName: string): string | null {
 
   if (EXPLICIT_MAPPINGS[packageName]) return EXPLICIT_MAPPINGS[packageName];
   if (LOCAL_PACKAGES.has(packageName)) return null;
+  if (extraLocalPackages?.has(packageName)) return null;
 
-  // Check if it's a subpath import of a local package
+  // Extract the base package name (handles scoped packages and subpath imports)
   const basePkg = packageName.includes('/') ? packageName.split('/')[0] : packageName;
   const isScoped = basePkg.startsWith('@');
   const scopedBasePkg = isScoped && packageName.includes('/')
@@ -214,6 +228,7 @@ function resolveNpmPackage(packageName: string): string | null {
     : basePkg;
 
   if (LOCAL_PACKAGES.has(scopedBasePkg)) return null;
+  if (extraLocalPackages?.has(scopedBasePkg)) return null;
 
   if (packageName === 'solid-js' || packageName.startsWith('solid-js/')) {
     return null;
@@ -227,7 +242,28 @@ function resolveNpmPackage(packageName: string): string | null {
     return `https://esm.sh/svelte@${svelteVersion}/${packageName.slice('svelte/'.length)}`;
   }
 
-  return `https://esm.sh/${packageName}?external=react`;
+  // Serve from VFS bundle if package is installed locally
+  if (installedPackages?.has(scopedBasePkg)) {
+    return `/_npm/${packageName}`;
+  }
+
+  // Build versioned esm.sh URL. Include major version from package.json
+  // dependencies when available — esm.sh requires this for subpath exports.
+  let esmPkg = packageName;
+  if (dependencies) {
+    const depVersion = dependencies[scopedBasePkg];
+    if (depVersion) {
+      const major = extractMajorVersion(depVersion);
+      if (major) {
+        // Insert @version after the base package name
+        const subpath = packageName.slice(scopedBasePkg.length); // e.g., "/react"
+        esmPkg = `${scopedBasePkg}@${major}${subpath}`;
+      }
+    }
+  }
+
+  const depsParam = esmShDeps ? `&deps=${esmShDeps}` : '';
+  return `https://esm.sh/${esmPkg}?external=react${depsParam}`;
 }
 
 /**
@@ -235,16 +271,36 @@ function resolveNpmPackage(packageName: string): string | null {
  * Uses acorn AST to precisely target import/export source strings,
  * avoiding false matches inside comments or string literals.
  * Falls back to regex if acorn fails.
+ *
+ * @param additionalLocalPackages - Extra packages to skip (not redirected to CDN).
+ *   Used by frameworks that add their own import map entries (e.g., Convex demo).
+ * @param dependencies - Dependency versions from package.json (e.g., {"ai": "^4.0.0"}).
+ *   Used to include major version in esm.sh URLs for correct subpath resolution.
+ * @param installedPackages - Packages installed in VFS node_modules. These are
+ *   served from /_npm/ instead of esm.sh, giving us full control over resolution.
  */
-export function redirectNpmImports(code: string): string {
+export function redirectNpmImports(
+  code: string,
+  additionalLocalPackages?: string[],
+  dependencies?: Record<string, string>,
+  esmShDeps?: string,
+  installedPackages?: Set<string>,
+): string {
+  const extraSet = additionalLocalPackages?.length ? new Set(additionalLocalPackages) : undefined;
   try {
-    return redirectNpmImportsAst(code);
+    return redirectNpmImportsAst(code, extraSet, dependencies, esmShDeps, installedPackages);
   } catch {
-    return redirectNpmImportsRegex(code);
+    return redirectNpmImportsRegex(code, extraSet, dependencies, esmShDeps, installedPackages);
   }
 }
 
-function redirectNpmImportsAst(code: string): string {
+function redirectNpmImportsAst(
+  code: string,
+  extraLocalPackages?: Set<string>,
+  dependencies?: Record<string, string>,
+  esmShDeps?: string,
+  installedPackages?: Set<string>,
+): string {
   const ast = acorn.parse(code, { ecmaVersion: 'latest', sourceType: 'module' });
 
   // Collect source nodes that need redirecting: [start, end, newUrl]
@@ -252,7 +308,7 @@ function redirectNpmImportsAst(code: string): string {
 
   function processSource(sourceNode: any) {
     if (!sourceNode || sourceNode.type !== 'Literal') return;
-    const resolved = resolveNpmPackage(sourceNode.value);
+    const resolved = resolveNpmPackage(sourceNode.value, extraLocalPackages, dependencies, esmShDeps, installedPackages);
     if (resolved) {
       // Replace the string literal (including quotes) — sourceNode.start/end include quotes
       replacements.push([sourceNode.start, sourceNode.end, JSON.stringify(resolved)]);
@@ -281,10 +337,16 @@ function redirectNpmImportsAst(code: string): string {
   return result;
 }
 
-function redirectNpmImportsRegex(code: string): string {
+function redirectNpmImportsRegex(
+  code: string,
+  extraLocalPackages?: Set<string>,
+  dependencies?: Record<string, string>,
+  esmShDeps?: string,
+  installedPackages?: Set<string>,
+): string {
   const importPattern = /(from\s*['"])([^'"./][^'"]*?)(['"])/g;
   return code.replace(importPattern, (match, prefix, packageName, suffix) => {
-    const resolved = resolveNpmPackage(packageName);
+    const resolved = resolveNpmPackage(packageName, extraLocalPackages, dependencies, esmShDeps, installedPackages);
     if (!resolved) return match;
     return `${prefix}${resolved}${suffix}`;
   });

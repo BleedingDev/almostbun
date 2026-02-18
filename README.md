@@ -18,7 +18,8 @@ Built by the creators of [Macaly.com](https://macaly.com) — a tool that lets a
 
 - **Virtual File System** - Full in-memory filesystem with Node.js-compatible API
 - **Node.js API Shims** - 40+ shimmed modules (`fs`, `path`, `http`, `events`, and more)
-- **npm Package Installation** - Install and run real npm packages in the browser
+- **npm Package Installation** - Install and run real npm packages in the browser with automatic bin stub creation
+- **Run Any CLI Tool** - npm packages with `bin` entries (vitest, eslint, tsc, etc.) work automatically
 - **Dev Servers** - Built-in Vite and Next.js development servers
 - **Hot Module Replacement** - React Refresh support for instant updates
 - **TypeScript Support** - First-class TypeScript/TSX transformation via esbuild-wasm
@@ -125,6 +126,69 @@ container.execute(`
   console.log(_.capitalize('hello world'));
 `);
 // Output: Hello world
+```
+
+### Running Shell Commands
+
+```typescript
+import { createContainer } from 'almostnode';
+
+const container = createContainer();
+
+// Write a package.json with scripts
+container.vfs.writeFileSync('/package.json', JSON.stringify({
+  name: 'my-app',
+  scripts: {
+    build: 'echo Building...',
+    test: 'vitest run'
+  }
+}));
+
+// Run shell commands directly
+const result = await container.run('npm run build');
+console.log(result.stdout); // "Building..."
+
+await container.run('npm test');
+await container.run('echo hello && echo world');
+await container.run('ls /');
+```
+
+Supported npm commands: `npm run <script>`, `npm start`, `npm test`, `npm install`, `npm ls`.
+Pre/post lifecycle scripts (`prebuild`, `postbuild`, etc.) run automatically.
+
+### Running CLI Tools
+
+Any npm package with a `bin` field works automatically after install — no configuration needed.
+
+```typescript
+// Install a package that includes a CLI tool
+await container.npm.install('vitest');
+
+// Run it directly — bin stubs are created in /node_modules/.bin/
+const result = await container.run('vitest run');
+console.log(result.stdout); // Test results
+```
+
+This works because `npm install` reads each package's `bin` field and creates executable scripts in `/node_modules/.bin/`. The shell's PATH includes `/node_modules/.bin`, so tools like `vitest`, `eslint`, `tsc`, etc. resolve automatically.
+
+### Streaming Output & Long-Running Commands
+
+For commands that run continuously (like watch mode), use streaming callbacks and abort signals:
+
+```typescript
+const controller = new AbortController();
+
+await container.run('vitest --watch', {
+  onStdout: (data) => console.log(data),
+  onStderr: (data) => console.error(data),
+  signal: controller.signal,
+});
+
+// Send input to the running process
+container.sendInput('a'); // Press 'a' to re-run all tests
+
+// Stop the command
+controller.abort();
 ```
 
 ### With Next.js Dev Server
@@ -395,6 +459,30 @@ Returns:
 - `container.runtime` - Runtime instance
 - `container.npm` - PackageManager instance
 - `container.serverBridge` - ServerBridge instance
+- `container.run(command, options?)` - Run a shell command (returns `Promise<RunResult>`)
+- `container.sendInput(data)` - Send stdin data to the currently running process
+- `container.execute(code)` - Execute JavaScript code
+- `container.runFile(filename)` - Run a file from VirtualFS
+
+#### `container.run(command, options?)`
+
+```typescript
+interface RunResult {
+  stdout: string;
+  stderr: string;
+  exitCode: number;
+}
+
+interface RunOptions {
+  onStdout?: (data: string) => void;  // Stream stdout in real-time
+  onStderr?: (data: string) => void;  // Stream stderr in real-time
+  signal?: AbortSignal;                // Cancel the command
+}
+```
+
+#### `container.sendInput(data)`
+
+Sends data to the stdin of the currently running process. Emits both `data` and `keypress` events for compatibility with readline-based tools (e.g., vitest watch mode).
 
 ### VirtualFS
 
@@ -853,6 +941,22 @@ triggerHMR('/app/page.tsx', iframe);
 
 ---
 
+## Demos
+
+Start the dev server with `npm run dev` and open any demo at `http://localhost:5173`:
+
+| Demo | Path | Description |
+|------|------|-------------|
+| **Next.js** | `/examples/next-demo.html` | Pages & App Router, CSS modules, route groups, API routes, HMR |
+| **Vite** | `/examples/vite-demo.html` | Vite dev server with React and HMR |
+| **Vitest** | `/examples/vitest-demo.html` | Real vitest execution with xterm.js terminal and watch mode |
+| **Express** | `/examples/express-demo.html` | Express.js HTTP server running in the browser |
+| **Convex** | `/examples/demo-convex-app.html` | Real-time todo app with Convex cloud deployment |
+| **Vercel AI SDK** | `/examples/demo-vercel-ai-sdk.html` | Streaming AI chatbot with Next.js and OpenAI |
+| **Bash** | `/examples/bash-demo.html` | Interactive POSIX shell emulator |
+
+---
+
 ## Development
 
 ### Setup
@@ -879,7 +983,7 @@ npm run test:e2e
 npm run dev
 ```
 
-Open `http://localhost:5173/examples/next-demo.html` to see the Next.js demo.
+See the [Demos](#demos) section for all available examples.
 
 ---
 

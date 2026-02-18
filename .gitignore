@@ -34,3 +34,7 @@ npm-debug.log*
 
 # Temp folders for testing
 temp/
+
+# Scratch files
+e2e/deploy-debug.spec.ts
+examples/macaly-demo.html

@@ -4,11 +4,10 @@
  */
 
 import { VirtualFS } from './virtual-fs';
-import { Runtime } from './runtime';
 import { NextDevServer } from './frameworks/next-dev-server';
 import { getServerBridge } from './server-bridge';
-import { Buffer } from './shims/stream';
-import { createAIChatbotProject } from './ai-chatbot-demo';
+import { createAIChatbotProject } from './vercel-ai-sdk-demo';
+import { PackageManager } from './npm/index';
 
 // DOM elements
 const logsEl = document.getElementById('logs') as HTMLDivElement;
@@ -21,6 +20,9 @@ const apiKeyInput = document.getElementById('apiKey') as HTMLInputElement;
 const connectBtn = document.getElementById('connectBtn') as HTMLButtonElement;
 const connectionStatus = document.getElementById('connectionStatus') as HTMLDivElement;
 const connectionStatusText = document.getElementById('connectionStatusText') as HTMLSpanElement;
+const setupOverlay = document.getElementById('setupOverlay') as HTMLDivElement;
+const setupKeyInput = document.getElementById('setupKeyInput') as HTMLInputElement;
+const setupKeyBtn = document.getElementById('setupKeyBtn') as HTMLButtonElement;
 
 let serverUrl: string | null = null;
 let iframe: HTMLIFrameElement | null = null;
@@ -111,27 +113,30 @@ async function main() {
     createAIChatbotProject(vfs);
     log('Project files created', 'success');
 
-    setStatus('Initializing runtime...', 'loading');
-    log('Initializing runtime...');
-    const runtime = new Runtime(vfs, {
-      cwd: '/',
-      env: { NODE_ENV: 'development' },
-      onConsole: (method, args) => {
-        const msg = args.map(a => String(a)).join(' ');
-        if (method === 'error') log(msg, 'error');
-        else if (method === 'warn') log(msg, 'warn');
-        else log(msg);
-      },
-    });
+    // Install AI SDK packages via PackageManager
+    setStatus('Installing packages...', 'loading');
+    log('Installing npm packages...');
+    const pm = new PackageManager(vfs, { cwd: '/' });
+    const packages = ['zod', 'ai@5', '@ai-sdk/openai@2', '@ai-sdk/react@2'];
+    for (const pkg of packages) {
+      log(`Installing ${pkg}...`);
+      await pm.install(pkg, {
+        onProgress: (msg) => log(msg),
+        transform: true,
+      });
+    }
+    log('All packages installed', 'success');
 
     setStatus('Starting dev server...', 'loading');
     log('Starting Next.js dev server...');
 
     const port = 3003;
+    const corsProxy = new URLSearchParams(window.location.search).get('corsProxy') || undefined;
     devServer = new NextDevServer(vfs, {
       port,
       root: '/',
       preferAppRouter: true,
+      corsProxy,
     });
 
     const bridge = getServerBridge();
@@ -144,36 +149,7 @@ async function main() {
       log(`Service Worker warning: ${error}`, 'warn');
     }
 
-    // Create HTTP server wrapper
-    const httpServer = {
-      listening: true,
-      address: () => ({ port, address: '0.0.0.0', family: 'IPv4' }),
-      async handleRequest(
-        method: string,
-        url: string,
-        headers: Record<string, string>,
-        body?: string | Buffer
-      ) {
-        const bodyBuffer = body
-          ? typeof body === 'string' ? Buffer.from(body) : body
-          : undefined;
-        return devServer!.handleRequest(method, url, headers, bodyBuffer);
-      },
-      // Streaming request handler - forwards to devServer's streaming support
-      async handleStreamingRequest(
-        method: string,
-        url: string,
-        headers: Record<string, string>,
-        body: Buffer | undefined,
-        onStart: (statusCode: number, statusMessage: string, headers: Record<string, string>) => void,
-        onChunk: (chunk: string | Uint8Array) => void,
-        onEnd: () => void
-      ) {
-        return devServer!.handleStreamingRequest(method, url, headers, body, onStart, onChunk, onEnd);
-      },
-    };
-
-    bridge.registerServer(httpServer as any, port);
+    bridge.registerServer(devServer as any, port);
     devServer.start();
 
     serverUrl = bridge.getServerUrl(port) + '/';
@@ -187,6 +163,9 @@ async function main() {
     iframe.src = serverUrl;
     iframe.id = 'preview-iframe';
     iframe.name = 'preview-iframe';
+    iframe.style.width = '100%';
+    iframe.style.height = '100%';
+    iframe.style.border = 'none';
     iframe.setAttribute('sandbox', 'allow-forms allow-scripts allow-same-origin allow-popups allow-pointer-lock allow-modals allow-downloads allow-orientation-lock allow-presentation allow-popups-to-escape-sandbox');
 
     iframe.onload = () => {
@@ -228,9 +207,26 @@ async function main() {
       }
     };
 
+    // Setup overlay dialog
+    setupKeyInput.oninput = () => {
+      setupKeyBtn.disabled = !setupKeyInput.value.trim();
+    };
+    setupKeyBtn.onclick = () => {
+      const key = setupKeyInput.value.trim();
+      if (key) {
+        configureApiKey(key);
+        setupOverlay.classList.add('hidden');
+      }
+    };
+    setupKeyInput.onkeydown = (e) => {
+      if (e.key === 'Enter' && setupKeyInput.value.trim()) {
+        configureApiKey(setupKeyInput.value.trim());
+        setupOverlay.classList.add('hidden');
+      }
+    };
+
     log('Demo ready!', 'success');
-    log('Enter your OpenAI API key and click Connect to start chatting.');
-    log('Note: API calls go through a CORS proxy (corsproxy.io)');
+    log('Enter your OpenAI API key to start chatting.');
 
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);

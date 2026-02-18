@@ -4,10 +4,12 @@
  * These are injected into generated HTML pages as inline scripts or served as virtual modules.
  */
 
+import { REACT_REFRESH_CDN, TAILWIND_CDN_URL } from '../config/cdn';
+
 /**
  * Tailwind CSS CDN script for runtime JIT compilation
  */
-export const TAILWIND_CDN_SCRIPT = `<script src="https://cdn.tailwindcss.com"></script>`;
+export const TAILWIND_CDN_SCRIPT = `<script src="${TAILWIND_CDN_URL}"></script>`;
 
 /**
  * CORS Proxy script - provides proxyFetch function in the iframe
@@ -45,7 +47,7 @@ export const CORS_PROXY_SCRIPT = `
 export const REACT_REFRESH_PREAMBLE = `
 <script type="module">
 // Block until React Refresh is loaded and initialized
-const RefreshRuntime = await import('https://esm.sh/react-refresh@0.14.0/runtime').then(m => m.default || m);
+const RefreshRuntime = await import('${REACT_REFRESH_CDN}').then(m => m.default || m);
 
 RefreshRuntime.injectIntoGlobalHook(window);
 window.$RefreshRuntime$ = RefreshRuntime;

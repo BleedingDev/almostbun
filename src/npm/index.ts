@@ -18,6 +18,20 @@ import * as path from '../shims/path';
 import { initTransformer, transformPackage, isTransformerReady } from '../transform';
 import { parseGitHubRepoUrl } from '../repo/github';
 
+/**
+ * Normalize a package.json bin field into a consistent Record<string, string>.
+ * Handles both string form ("bin": "cli.js") and object form ("bin": {"cmd": "cli.js"}).
+ */
+function normalizeBin(pkgName: string, bin?: Record<string, string> | string): Record<string, string> {
+  if (!bin) return {};
+  if (typeof bin === 'string') {
+    // String form uses the package name (without scope) as the command name
+    const cmdName = pkgName.includes('/') ? pkgName.split('/').pop()! : pkgName;
+    return { [cmdName]: bin };
+  }
+  return bin;
+}
+
 export interface InstallOptions {
   registry?: string;
   save?: boolean;
@@ -1433,6 +1447,26 @@ export class PackageManager {
             } catch (transformError) {
               onProgress?.(`  Warning: Transform failed for ${name}: ${transformError}`);
             }
+          }
+
+          // Create bin stubs in /node_modules/.bin/
+          try {
+            const pkgJsonPath = path.join(pkgPath, 'package.json');
+            if (this.vfs.existsSync(pkgJsonPath)) {
+              const pkgJson = JSON.parse(this.vfs.readFileSync(pkgJsonPath, 'utf8'));
+              const binEntries = normalizeBin(name, pkgJson.bin);
+              const binDir = path.join(nodeModulesPath, '.bin');
+              for (const [cmdName, entryPath] of Object.entries(binEntries)) {
+                this.vfs.mkdirSync(binDir, { recursive: true });
+                const targetPath = path.join(pkgPath, entryPath);
+                this.vfs.writeFileSync(
+                  path.join(binDir, cmdName),
+                  `node "${targetPath}" "$@"\n`
+                );
+              }
+            }
+          } catch {
+            // Non-critical — skip if bin stub creation fails
           }
 
           added.push(name);

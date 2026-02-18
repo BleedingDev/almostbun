@@ -21,6 +21,13 @@ interface ProcessStream {
   removeListener: (event: string, listener: EventListener) => ProcessStream;
   removeAllListeners: (event?: string) => ProcessStream;
   setMaxListeners: (n: number) => ProcessStream;
+  getMaxListeners: () => number;
+  listenerCount: (event: string) => number;
+  listeners: (event: string) => EventListener[];
+  rawListeners: (event: string) => EventListener[];
+  prependListener: (event: string, listener: EventListener) => ProcessStream;
+  prependOnceListener: (event: string, listener: EventListener) => ProcessStream;
+  eventNames: () => string[];
   pause?: () => ProcessStream;
   resume?: () => ProcessStream;
   setEncoding?: (encoding: string) => ProcessStream;
@@ -94,6 +101,11 @@ export interface Process {
   eventNames: () => string[];
   setMaxListeners: (n: number) => Process;
   getMaxListeners: () => number;
+  // IPC support (used by child_process.fork)
+  send?: (message: unknown, callback?: (error: Error | null) => void) => boolean;
+  connected?: boolean;
+  // Internal debug counter
+  _cwdCallCount?: number;
 }
 
 // Helper to create a stream-like object with EventEmitter methods
@@ -136,6 +148,29 @@ function createProcessStream(
     setMaxListeners(n: number) {
       emitter.setMaxListeners(n);
       return stream;
+    },
+    getMaxListeners() {
+      return emitter.getMaxListeners();
+    },
+    listenerCount(event: string) {
+      return emitter.listenerCount(event);
+    },
+    listeners(event: string) {
+      return emitter.listeners(event);
+    },
+    rawListeners(event: string) {
+      return emitter.rawListeners(event);
+    },
+    prependListener(event: string, listener: EventListener) {
+      emitter.prependListener(event, listener);
+      return stream;
+    },
+    prependOnceListener(event: string, listener: EventListener) {
+      emitter.prependOnceListener(event, listener);
+      return stream;
+    },
+    eventNames() {
+      return emitter.eventNames();
     },
     pause() {
       return stream;
@@ -181,6 +216,8 @@ export function createProcess(options?: {
   argv?: string[];
   argv0?: string;
   onExit?: (code: number) => void;
+  onStdout?: (data: string) => void;
+  onStderr?: (data: string) => void;
 }): Process {
   let currentDir = options?.cwd || '/';
   const argv = options?.argv && options.argv.length > 0
@@ -262,12 +299,20 @@ export function createProcess(options?: {
     },
 
     stdout: createProcessStream(true, (data: string) => {
-      console.log(data);
+      if (options?.onStdout) {
+        options.onStdout(data);
+      } else {
+        console.log(data);
+      }
       return true;
     }) as ProcessWritableStream,
 
     stderr: createProcessStream(true, (data: string) => {
-      console.error(data);
+      if (options?.onStderr) {
+        options.onStderr(data);
+      } else {
+        console.error(data);
+      }
       return true;
     }) as ProcessWritableStream,
 

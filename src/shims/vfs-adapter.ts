@@ -126,11 +126,14 @@ export class VirtualFSAdapter implements IFileSystem {
       }
     }
 
+    // Files in .bin/ directories need execute permission for just-bash PATH resolution
+    const isExecutable = isFile && path.includes('/node_modules/.bin/');
+
     return {
       isFile,
       isDirectory,
       isSymbolicLink,
-      mode: isDirectory ? 0o755 : isSymbolicLink ? 0o777 : 0o644,
+      mode: isDirectory ? 0o755 : (isSymbolicLink ? 0o777 : (isExecutable ? 0o755 : 0o644)),
       size,
       mtime: new Date(),
     };

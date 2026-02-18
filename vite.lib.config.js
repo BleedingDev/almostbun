@@ -1,12 +1,11 @@
 import { defineConfig } from 'vite';
 import { resolve } from 'path';
 import wasm from 'vite-plugin-wasm';
-import topLevelAwait from 'vite-plugin-top-level-await';
+
 
 export default defineConfig({
   plugins: [
     wasm(),
-    topLevelAwait(),
     {
       name: 'browser-shims',
       enforce: 'pre',
@@ -63,7 +62,6 @@ export default defineConfig({
     format: 'es',
     plugins: () => [
       wasm(),
-      topLevelAwait(),
     ],
     rollupOptions: {
       output: {
