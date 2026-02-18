@@ -49,6 +49,17 @@ export type {
   BootstrapAndRunOptions,
   BootstrapAndRunResult,
 } from './repo';
+export {
+  buildRepoFailureDiagnostic,
+  RepoRunError,
+  getRepoFailureDiagnostic,
+} from './repo';
+export type {
+  RepoFailurePhase,
+  RepoFailureHint,
+  RepoFailureDiagnostic,
+  BuildRepoFailureDiagnosticOptions,
+} from './repo';
 export { ServerBridge, getServerBridge, resetServerBridge } from './server-bridge';
 export type { InitServiceWorkerOptions } from './server-bridge';
 // Dev servers

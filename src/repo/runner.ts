@@ -14,6 +14,7 @@ import {
   type BootstrapGitHubProjectResult,
 } from './bootstrap';
 import { runRepoPreflight, type RepoPreflightResult } from './preflight';
+import { buildRepoFailureDiagnostic, RepoRunError } from './failure-diagnostics';
 
 type PackageJsonLike = {
   scripts?: Record<string, string>;
@@ -1664,75 +1665,97 @@ export async function bootstrapAndRunGitHubProject(
   options: BootstrapAndRunOptions = {}
 ): Promise<BootstrapAndRunResult> {
   const trace = createTraceCollector(options.onTraceEvent);
-  trace.emit('bootstrap', 'Starting bootstrap and run flow', { repoUrl });
   const vfs = new VirtualFS();
-  trace.emit('bootstrap', 'Initialized virtual filesystem');
-  const bootstrap = await bootstrapGitHubProject(vfs, repoUrl, {
-    ...options,
-    destPath: options.destPath || '/project',
-  });
-  trace.emit('bootstrap', 'Repository bootstrap complete', {
-    projectPath: bootstrap.projectPath,
-    extractedFiles: bootstrap.extractedFiles.length,
-    transformedProjectFiles: bootstrap.transformedProjectFiles || 0,
-  });
-
-  const preflightMode = options.preflightMode ?? 'warn';
-  const preflight = preflightMode === 'off'
-    ? { issues: [], installOverrides: {}, hasErrors: false }
-    : runRepoPreflight(vfs, bootstrap.projectPath, {
-      autoFix: false,
-    });
-  if (preflightMode !== 'off') {
-    for (const issue of preflight.issues) {
-      trace.emit('preflight', issue.message, {
-        code: issue.code,
-        severity: issue.severity,
-        path: issue.path,
-      });
-      options.log?.(`[preflight:${issue.severity}] ${issue.message}${issue.path ? ` (${issue.path})` : ''}`);
-    }
-    if (preflightMode === 'strict' && preflight.hasErrors) {
-      const blocking = preflight.issues
-        .filter(issue => issue.severity === 'error')
-        .map(issue => `${issue.code}: ${issue.message}${issue.path ? ` (${issue.path})` : ''}`)
-        .join('\n');
-      trace.emit('preflight', 'Strict preflight failed', {
-        blockingIssues: preflight.issues.filter(issue => issue.severity === 'error').length,
-      });
-      throw new Error(`Strict preflight failed:\n${blocking}`);
-    }
-  }
-
-  const detected = detectRunnableProject(vfs, {
-    projectPath: bootstrap.projectPath,
-  });
-  trace.emit('detect', 'Detected runnable project', {
-    kind: detected.kind,
-    reason: detected.reason,
-    projectPath: detected.projectPath,
-    serverRoot: detected.serverRoot,
-  });
-
-  const externalTraceHandler = options.onTraceEvent;
-  const running = await startDetectedProject(vfs, detected, {
-    ...options,
-    onTraceEvent: (event) => {
-      trace.emit(`start:${event.phase}`, event.message, event.data);
-      externalTraceHandler?.(event);
-    },
-  });
-  trace.emit('ready', 'Running project ready', {
-    kind: running.kind,
-    port: running.port,
-    url: running.url,
-  });
-  return {
-    vfs,
-    bootstrap,
-    preflight,
-    detected,
-    running,
-    trace: trace.events,
+  let preflight: RepoPreflightResult = {
+    issues: [],
+    installOverrides: {},
+    hasErrors: false,
   };
+
+  try {
+    trace.emit('bootstrap', 'Starting bootstrap and run flow', { repoUrl });
+    trace.emit('bootstrap', 'Initialized virtual filesystem');
+    const bootstrap = await bootstrapGitHubProject(vfs, repoUrl, {
+      ...options,
+      destPath: options.destPath || '/project',
+    });
+    trace.emit('bootstrap', 'Repository bootstrap complete', {
+      projectPath: bootstrap.projectPath,
+      extractedFiles: bootstrap.extractedFiles.length,
+      transformedProjectFiles: bootstrap.transformedProjectFiles || 0,
+    });
+
+    const preflightMode = options.preflightMode ?? 'warn';
+    preflight = preflightMode === 'off'
+      ? { issues: [], installOverrides: {}, hasErrors: false }
+      : runRepoPreflight(vfs, bootstrap.projectPath, {
+        autoFix: false,
+      });
+    if (preflightMode !== 'off') {
+      for (const issue of preflight.issues) {
+        trace.emit('preflight', issue.message, {
+          code: issue.code,
+          severity: issue.severity,
+          path: issue.path,
+        });
+        options.log?.(`[preflight:${issue.severity}] ${issue.message}${issue.path ? ` (${issue.path})` : ''}`);
+      }
+      if (preflightMode === 'strict' && preflight.hasErrors) {
+        const blocking = preflight.issues
+          .filter(issue => issue.severity === 'error')
+          .map(issue => `${issue.code}: ${issue.message}${issue.path ? ` (${issue.path})` : ''}`)
+          .join('\n');
+        trace.emit('preflight', 'Strict preflight failed', {
+          blockingIssues: preflight.issues.filter(issue => issue.severity === 'error').length,
+        });
+        throw new Error(`Strict preflight failed:\n${blocking}`);
+      }
+    }
+
+    const detected = detectRunnableProject(vfs, {
+      projectPath: bootstrap.projectPath,
+    });
+    trace.emit('detect', 'Detected runnable project', {
+      kind: detected.kind,
+      reason: detected.reason,
+      projectPath: detected.projectPath,
+      serverRoot: detected.serverRoot,
+    });
+
+    const externalTraceHandler = options.onTraceEvent;
+    const running = await startDetectedProject(vfs, detected, {
+      ...options,
+      onTraceEvent: (event) => {
+        trace.emit(`start:${event.phase}`, event.message, event.data);
+        externalTraceHandler?.(event);
+      },
+    });
+    trace.emit('ready', 'Running project ready', {
+      kind: running.kind,
+      port: running.port,
+      url: running.url,
+    });
+    return {
+      vfs,
+      bootstrap,
+      preflight,
+      detected,
+      running,
+      trace: trace.events,
+    };
+  } catch (error) {
+    if (error instanceof RepoRunError) {
+      throw error;
+    }
+    const diagnostic = buildRepoFailureDiagnostic({
+      error,
+      preflightIssues: preflight.issues,
+    });
+    trace.emit('error', diagnostic.message, {
+      code: diagnostic.code,
+      phase: diagnostic.phase,
+      confidence: diagnostic.confidence,
+    });
+    throw new RepoRunError(diagnostic, error);
+  }
 }

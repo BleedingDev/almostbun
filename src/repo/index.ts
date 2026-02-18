@@ -26,3 +26,14 @@ export type {
   BootstrapAndRunOptions,
   BootstrapAndRunResult,
 } from './runner';
+export {
+  buildRepoFailureDiagnostic,
+  RepoRunError,
+  getRepoFailureDiagnostic,
+} from './failure-diagnostics';
+export type {
+  RepoFailurePhase,
+  RepoFailureHint,
+  RepoFailureDiagnostic,
+  BuildRepoFailureDiagnosticOptions,
+} from './failure-diagnostics';
