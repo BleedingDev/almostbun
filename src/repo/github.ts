@@ -8,7 +8,7 @@
 import * as path from '../shims/path';
 import { VirtualFS } from '../virtual-fs';
 import { extractTarball } from '../npm/tarball';
-import { fetchWithRetry } from '../npm/fetch';
+import { fetchWithRetry, type FetchResponseCacheOptions } from '../npm/fetch';
 import {
   readPersistentBinaryCache,
   writePersistentBinaryCache,
@@ -30,6 +30,10 @@ type ArchiveCacheLimits = {
 const DEFAULT_ARCHIVE_CACHE_MAX_ENTRIES = 8;
 const DEFAULT_ARCHIVE_CACHE_MAX_BYTES = 256 * 1024 * 1024;
 const ARCHIVE_PERSISTENT_CACHE_NAMESPACE = 'github-archives';
+const DEFAULT_GITHUB_FETCH_ATTEMPTS = 3;
+const DEFAULT_GITHUB_FETCH_BASE_DELAY_MS = 500;
+const DEFAULT_GITHUB_FETCH_MAX_DELAY_MS = 2000;
+const DEFAULT_GITHUB_FETCH_TIMEOUT_MS = 10_000;
 const archiveCache = new Map<string, ArchiveCacheEntry>();
 let archiveCacheTotalBytes = 0;
 
@@ -317,6 +321,134 @@ function formatRetryReason(reason: string): string {
   return normalized.replace(/failed to fetch/gi, 'network request blocked');
 }
 
+type GitHubFetchRetrySettings = {
+  attempts: number;
+  baseDelayMs: number;
+  maxDelayMs: number;
+  requestTimeoutMs: number;
+};
+
+type FetchGitHubResourceOptions = {
+  cache?: FetchResponseCacheOptions;
+  onRetry?: (attempt: number, reason: string) => void;
+  settings: GitHubFetchRetrySettings;
+};
+
+function isRetryableHttpStatus(status: number): boolean {
+  return status === 408 || status === 425 || status === 429 || status >= 500;
+}
+
+function isRetryableNetworkError(error: unknown): boolean {
+  if (!error) return false;
+  const message = String((error as { message?: unknown }).message || error).toLowerCase();
+  return (
+    message.includes('networkerror') ||
+    message.includes('timed out') ||
+    message.includes('connect timeout') ||
+    message.includes('connection terminated') ||
+    message.includes('terminated') ||
+    message.includes('aborted') ||
+    message.includes('socket hang up') ||
+    message.includes('connection closed') ||
+    message.includes('fetch failed') ||
+    message.includes('failed to fetch')
+  );
+}
+
+function computeBackoffDelay(attempt: number, baseDelayMs: number, maxDelayMs: number): number {
+  if (baseDelayMs <= 0 && maxDelayMs <= 0) {
+    return 0;
+  }
+  const exponential = Math.min(maxDelayMs, baseDelayMs * Math.pow(2, attempt - 1));
+  const jitterWindow = Math.max(1, Math.floor(baseDelayMs / 2));
+  const jitter = Math.floor(Math.random() * jitterWindow);
+  return exponential + jitter;
+}
+
+function getGitHubFetchRetrySettings(): GitHubFetchRetrySettings {
+  const attempts = Math.max(1, Math.floor(readEnvNumber('ALMOSTBUN_GITHUB_FETCH_ATTEMPTS', DEFAULT_GITHUB_FETCH_ATTEMPTS)));
+  const baseDelayMs = Math.max(0, Math.floor(readEnvNumber('ALMOSTBUN_GITHUB_FETCH_BASE_DELAY_MS', DEFAULT_GITHUB_FETCH_BASE_DELAY_MS)));
+  const maxDelayMs = Math.max(baseDelayMs, Math.floor(readEnvNumber('ALMOSTBUN_GITHUB_FETCH_MAX_DELAY_MS', DEFAULT_GITHUB_FETCH_MAX_DELAY_MS)));
+  const requestTimeoutMs = Math.max(0, Math.floor(readEnvNumber('ALMOSTBUN_GITHUB_FETCH_TIMEOUT_MS', DEFAULT_GITHUB_FETCH_TIMEOUT_MS)));
+  return {
+    attempts,
+    baseDelayMs,
+    maxDelayMs,
+    requestTimeoutMs,
+  };
+}
+
+async function sleep(ms: number): Promise<void> {
+  if (ms <= 0) return;
+  await new Promise<void>((resolve) => setTimeout(resolve, ms));
+}
+
+async function fetchGitHubResource(
+  url: string,
+  options: FetchGitHubResourceOptions
+): Promise<Response> {
+  const { settings } = options;
+  let lastError: unknown;
+  let lastResponse: Response | undefined;
+
+  for (let attempt = 1; attempt <= settings.attempts; attempt += 1) {
+    const hasAbortController = typeof AbortController !== 'undefined';
+    const controller = hasAbortController ? new AbortController() : undefined;
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    let timedOut = false;
+
+    if (controller && settings.requestTimeoutMs > 0) {
+      timeoutId = setTimeout(() => {
+        timedOut = true;
+        controller.abort();
+      }, settings.requestTimeoutMs);
+    }
+
+    try {
+      const response = await fetchWithRetry(
+        url,
+        controller ? { signal: controller.signal } : undefined,
+        {
+          attempts: 1,
+          cache: options.cache,
+        }
+      );
+
+      if (!response.ok && isRetryableHttpStatus(response.status) && attempt < settings.attempts) {
+        lastResponse = response;
+        options.onRetry?.(attempt, `HTTP ${response.status}`);
+        await sleep(computeBackoffDelay(attempt, settings.baseDelayMs, settings.maxDelayMs));
+        continue;
+      }
+
+      return response;
+    } catch (error) {
+      lastError = error;
+      const retryable = timedOut || isRetryableNetworkError(error);
+      if (!retryable || attempt >= settings.attempts) {
+        break;
+      }
+      const reason = timedOut
+        ? `request timed out after ${settings.requestTimeoutMs}ms`
+        : String((error as { message?: unknown }).message || error);
+      options.onRetry?.(attempt, reason);
+      await sleep(computeBackoffDelay(attempt, settings.baseDelayMs, settings.maxDelayMs));
+    } finally {
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+    }
+  }
+
+  if (lastResponse) {
+    return lastResponse;
+  }
+
+  throw lastError instanceof Error
+    ? lastError
+    : new Error(`Failed to fetch ${url}`);
+}
+
 interface GitHubTreeResponse {
   tree?: Array<{
     path?: string;
@@ -344,13 +476,15 @@ function decodeBase64ToBytes(content: string): Uint8Array {
 async function fetchRawFileWithFallback(
   rawUrl: string,
   relativePath: string,
-  options: ImportGitHubRepoOptions
+  options: ImportGitHubRepoOptions,
+  retrySettings: GitHubFetchRetrySettings
 ): Promise<Response> {
   let response: Response | null = null;
   let directError: unknown;
 
   try {
-    response = await fetchWithRetry(rawUrl, undefined, {
+    response = await fetchGitHubResource(rawUrl, {
+      settings: retrySettings,
       onRetry: (attempt, reason) => {
         options.onProgress?.(
           `Retrying raw file download (${relativePath}) [${attempt}] due to ${formatRetryReason(reason)}`
@@ -376,7 +510,8 @@ async function fetchRawFileWithFallback(
       const proxiedUrl = buildProxyUrl(proxyBase, rawUrl);
       options.onProgress?.(`Retrying file via CORS proxy (${relativePath}): ${proxyBase}`);
       try {
-        const proxiedResponse = await fetchWithRetry(proxiedUrl, undefined, {
+        const proxiedResponse = await fetchGitHubResource(proxiedUrl, {
+          settings: retrySettings,
           cache: {
             namespace: 'github-raw-proxy',
             scope: proxyBase,
@@ -407,14 +542,16 @@ async function fetchFileViaContentsApi(
   repo: ParsedGitHubRepoUrl,
   encodedPath: string,
   relativePath: string,
-  options: ImportGitHubRepoOptions
+  options: ImportGitHubRepoOptions,
+  retrySettings: GitHubFetchRetrySettings
 ): Promise<Uint8Array | null> {
   const contentsUrl =
     `https://api.github.com/repos/${repo.owner}/${repo.repo}/contents/${encodedPath}?ref=${encodeURIComponent(repo.ref)}`;
 
   let contentsResponse: Response;
   try {
-    contentsResponse = await fetchWithRetry(contentsUrl, undefined, {
+    contentsResponse = await fetchGitHubResource(contentsUrl, {
+      settings: retrySettings,
       cache: {
         namespace: 'github-contents',
         scope: `${repo.owner}/${repo.repo}`,
@@ -443,7 +580,12 @@ async function fetchFileViaContentsApi(
 
   if (payload.download_url) {
     try {
-      const fallbackRawResponse = await fetchRawFileWithFallback(payload.download_url, relativePath, options);
+      const fallbackRawResponse = await fetchRawFileWithFallback(
+        payload.download_url,
+        relativePath,
+        options,
+        retrySettings
+      );
       if (fallbackRawResponse.ok) {
         return new Uint8Array(await fallbackRawResponse.arrayBuffer());
       }
@@ -459,12 +601,14 @@ async function importGitHubRepoViaApi(
   vfs: VirtualFS,
   repo: ParsedGitHubRepoUrl,
   destPath: string,
-  options: ImportGitHubRepoOptions
+  options: ImportGitHubRepoOptions,
+  retrySettings: GitHubFetchRetrySettings
 ): Promise<string[]> {
   const treeUrl =
     `https://api.github.com/repos/${repo.owner}/${repo.repo}/git/trees/${encodeURIComponent(repo.ref)}?recursive=1`;
   options.onProgress?.('Archive download unavailable, using GitHub API fallback...');
-  const treeResponse = await fetchWithRetry(treeUrl, undefined, {
+  const treeResponse = await fetchGitHubResource(treeUrl, {
+    settings: retrySettings,
     cache: {
       namespace: 'github-tree',
       scope: `${repo.owner}/${repo.repo}`,
@@ -525,7 +669,7 @@ async function importGitHubRepoViaApi(
     let rawStatus: number | null = null;
 
     try {
-      const rawResponse = await fetchRawFileWithFallback(rawUrl, relativePath, options);
+      const rawResponse = await fetchRawFileWithFallback(rawUrl, relativePath, options, retrySettings);
       rawStatus = rawResponse.status;
       if (rawResponse.ok) {
         rawBytes = new Uint8Array(await rawResponse.arrayBuffer());
@@ -535,7 +679,7 @@ async function importGitHubRepoViaApi(
     }
 
     if (!rawBytes) {
-      const apiBytes = await fetchFileViaContentsApi(repo, encodedPath, relativePath, options);
+      const apiBytes = await fetchFileViaContentsApi(repo, encodedPath, relativePath, options, retrySettings);
       if (apiBytes) {
         rawBytes = apiBytes;
       }
@@ -638,6 +782,7 @@ export async function importGitHubRepo(
   repoUrl: string,
   options: ImportGitHubRepoOptions = {}
 ): Promise<ImportGitHubRepoResult> {
+  const retrySettings = getGitHubFetchRetrySettings();
   const repo = parseGitHubRepoUrl(repoUrl);
   const destPath = options.destPath || '/project';
   const projectPath = repo.subdir ? path.join(destPath, repo.subdir) : destPath;
@@ -648,17 +793,14 @@ export async function importGitHubRepo(
   });
 
   const fetchArchive = async (archiveUrl: string): Promise<Response> => {
-    return fetchWithRetry(
-      archiveUrl,
-      undefined,
-      {
-        onRetry: (attempt, reason) => {
-          options.onProgress?.(
-            `Retrying GitHub archive download (${attempt}) due to ${formatRetryReason(reason)}`
-          );
-        },
-      }
-    );
+    return fetchGitHubResource(archiveUrl, {
+      settings: retrySettings,
+      onRetry: (attempt, reason) => {
+        options.onProgress?.(
+          `Retrying GitHub archive download (${attempt}) due to ${formatRetryReason(reason)}`
+        );
+      },
+    });
   };
 
   options.onProgress?.(`Downloading ${repo.owner}/${repo.repo}@${repo.ref}...`);
@@ -695,12 +837,6 @@ export async function importGitHubRepo(
     }
   }
 
-  if (!archiveBuffer && !response) {
-    throw directError instanceof Error
-      ? directError
-      : new Error(`Failed to download GitHub archive: ${repo.archiveUrl}`);
-  }
-
   let extractedFiles: string[] = [];
 
   if (!archiveBuffer && response?.ok) {
@@ -715,11 +851,19 @@ export async function importGitHubRepo(
       stripComponents: 1,
       onProgress: options.onProgress,
     });
-  } else if (isBrowserRuntime()) {
-    archiveSource = 'api-fallback';
-    extractedFiles = await importGitHubRepoViaApi(vfs, repo, destPath, options);
   } else {
-    throw new Error(`Failed to download GitHub archive: ${response?.status ?? 'unknown'}`);
+    const archiveFailureDetail = response
+      ? `HTTP ${response.status}`
+      : (directError instanceof Error ? directError.message : 'unknown');
+
+    try {
+      archiveSource = 'api-fallback';
+      extractedFiles = await importGitHubRepoViaApi(vfs, repo, destPath, options, retrySettings);
+    } catch (apiError) {
+      throw new Error(
+        `Failed to download GitHub archive (${archiveFailureDetail}); GitHub API fallback failed: ${String((apiError as Error)?.message || apiError)}`
+      );
+    }
   }
 
   if (repo.subdir && !vfs.existsSync(projectPath)) {

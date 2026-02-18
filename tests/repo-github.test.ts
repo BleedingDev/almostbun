@@ -505,6 +505,109 @@ describe('GitHub repo import helpers', () => {
     }
   });
 
+  it('falls back to GitHub API file import in node runtime when archive download fails', async () => {
+    const vfs = new VirtualFS();
+
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (url) => {
+      const urlStr = String(url);
+      if (urlStr === 'https://codeload.github.com/acme/demo/tar.gz/HEAD') {
+        throw new TypeError('fetch failed');
+      }
+      if (urlStr === 'https://api.github.com/repos/acme/demo/git/trees/HEAD?recursive=1') {
+        return new Response(
+          JSON.stringify({
+            tree: [{ path: 'package.json', type: 'blob' }],
+          }),
+          { status: 200 }
+        );
+      }
+      if (urlStr === 'https://raw.githubusercontent.com/acme/demo/HEAD/package.json') {
+        return new Response('{"name":"node-api-fallback"}', { status: 200 });
+      }
+      return new Response('not-found', { status: 404 });
+    });
+
+    const result = await importGitHubRepo(vfs, 'https://github.com/acme/demo', {
+      destPath: '/project',
+    });
+
+    expect(result.projectPath).toBe('/project');
+    expect(result.archiveCacheSource).toBe('api-fallback');
+    expect(vfs.readFileSync('/project/package.json', 'utf8')).toContain('"name":"node-api-fallback"');
+  });
+
+  it('retries archive download when a request attempt times out', async () => {
+    const vfs = new VirtualFS();
+    const archive = pako.gzip(
+      createMinimalTarball({
+        'package/package.json': '{"name":"retry-timeout","version":"1.0.0"}',
+      })
+    );
+
+    const originalAttempts = process.env.ALMOSTBUN_GITHUB_FETCH_ATTEMPTS;
+    const originalTimeoutMs = process.env.ALMOSTBUN_GITHUB_FETCH_TIMEOUT_MS;
+    const originalBaseDelay = process.env.ALMOSTBUN_GITHUB_FETCH_BASE_DELAY_MS;
+    const originalMaxDelay = process.env.ALMOSTBUN_GITHUB_FETCH_MAX_DELAY_MS;
+    process.env.ALMOSTBUN_GITHUB_FETCH_ATTEMPTS = '2';
+    process.env.ALMOSTBUN_GITHUB_FETCH_TIMEOUT_MS = '5';
+    process.env.ALMOSTBUN_GITHUB_FETCH_BASE_DELAY_MS = '0';
+    process.env.ALMOSTBUN_GITHUB_FETCH_MAX_DELAY_MS = '0';
+
+    let attempts = 0;
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, init) => {
+      attempts += 1;
+      if (attempts === 1) {
+        return await new Promise<Response>((_resolve, reject) => {
+          const signal = init?.signal as AbortSignal | undefined;
+          signal?.addEventListener(
+            'abort',
+            () => {
+              const abortError = Object.assign(new Error('request aborted'), { name: 'AbortError' });
+              reject(abortError);
+            },
+            { once: true }
+          );
+        });
+      }
+      return new Response(archive, { status: 200 });
+    });
+
+    try {
+      const result = await importGitHubRepo(vfs, 'https://github.com/acme/demo', {
+        destPath: '/project',
+      });
+
+      expect(result.projectPath).toBe('/project');
+      expect(vfs.existsSync('/project/package.json')).toBe(true);
+      expect(attempts).toBe(2);
+      const archiveCalls = fetchSpy.mock.calls.filter(
+        call => String(call[0]) === 'https://codeload.github.com/acme/demo/tar.gz/HEAD'
+      );
+      expect(archiveCalls).toHaveLength(2);
+    } finally {
+      if (originalAttempts === undefined) {
+        delete process.env.ALMOSTBUN_GITHUB_FETCH_ATTEMPTS;
+      } else {
+        process.env.ALMOSTBUN_GITHUB_FETCH_ATTEMPTS = originalAttempts;
+      }
+      if (originalTimeoutMs === undefined) {
+        delete process.env.ALMOSTBUN_GITHUB_FETCH_TIMEOUT_MS;
+      } else {
+        process.env.ALMOSTBUN_GITHUB_FETCH_TIMEOUT_MS = originalTimeoutMs;
+      }
+      if (originalBaseDelay === undefined) {
+        delete process.env.ALMOSTBUN_GITHUB_FETCH_BASE_DELAY_MS;
+      } else {
+        process.env.ALMOSTBUN_GITHUB_FETCH_BASE_DELAY_MS = originalBaseDelay;
+      }
+      if (originalMaxDelay === undefined) {
+        delete process.env.ALMOSTBUN_GITHUB_FETCH_MAX_DELAY_MS;
+      } else {
+        process.env.ALMOSTBUN_GITHUB_FETCH_MAX_DELAY_MS = originalMaxDelay;
+      }
+    }
+  });
+
   it('retries raw file downloads via CORS proxy during API fallback', async () => {
     const vfs = new VirtualFS();
 
