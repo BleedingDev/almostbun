@@ -1,6 +1,6 @@
 # Public Repo Quality Gates
 
-Generated: 2026-02-18T17:19:09.890Z
+Generated: 2026-02-18T17:21:23.393Z
 Mode: enforce
 Report: test-results/repo-matrix/full-recalibrated/report.json
 Baseline: config/repo-matrix/full-baseline.json
@@ -19,9 +19,12 @@ Baseline: config/repo-matrix/full-baseline.json
 - [PASS] Pass rate: actual=97.48, expected=>= 96.98
 - [PASS] Fail count: actual=4, expected=<= 6
 - [PASS] p90 duration (ms): actual=38764, expected=<= 48517
+- [PASS] Stage drop-off: bootstrap: actual=4, expected=<= 6
+- [PASS] Stage drop-off: detect: actual=0, expected=<= 2
+- [PASS] Stage drop-off: start: actual=0, expected=<= 2
 - [PASS] Stage drop-off: probe: actual=0, expected=<= 2
 - [PASS] Stage drop-off: runtime: actual=0, expected=<= 2
-- [PASS] Stage drop-off: unknown: actual=1, expected=<= 3
+- [PASS] Stage drop-off: unknown: actual=0, expected=<= 2
 
 ## Result: PASS
 

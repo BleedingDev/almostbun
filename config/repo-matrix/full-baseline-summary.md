@@ -1,6 +1,6 @@
 # Public Repo Full Matrix Baseline
 
-Generated: 2026-02-18T17:19:09.859Z
+Generated: 2026-02-18T17:21:23.324Z
 
 ## Overview
 
@@ -20,24 +20,24 @@ Generated: 2026-02-18T17:19:09.859Z
 - Compatibility conversion: **97.5%** of repos reached a runnable and probe-verified state.
 - Time-to-value: median case completion is **15765 ms** (p90: **38764 ms**).
 - Primary loss driver: **Bootstrap** stage drop-offs.
-- Top technical blocker cluster: **Unknown**.
+- Top technical blocker cluster: **Network/CORS**.
 
 ## Functional Funnel
 
 | Stage | Drop-offs | Remaining Cases |
 | --- | ---: | ---: |
-| Bootstrap | 3 | 156 |
-| Detection | 0 | 156 |
-| Server Start | 0 | 156 |
-| Probe | 0 | 156 |
-| Runtime | 0 | 156 |
-| Unknown | 1 | 155 |
+| Bootstrap | 4 | 155 |
+| Detection | 0 | 155 |
+| Server Start | 0 | 155 |
+| Probe | 0 | 155 |
+| Runtime | 0 | 155 |
+| Unknown | 0 | 155 |
 
 ## Failure Categories
 
 | Category | Count |
 | --- | ---: |
-| Unknown | 4 |
+| Network/CORS | 4 |
 
 ## Failing Cases (Top 12)
 

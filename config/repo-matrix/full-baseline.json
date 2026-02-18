@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "generatedAt": "2026-02-18T17:19:09.824Z",
+  "generatedAt": "2026-02-18T17:21:23.265Z",
   "profile": "full",
   "label": "full-baseline-recalibrated",
   "sourceReportPath": "test-results/repo-matrix/full-recalibrated/report.json",
@@ -20,15 +20,15 @@
     "p90DurationMs": 38764,
     "avgDurationMs": 20052,
     "stageDropOffCounts": {
-      "bootstrap": 3,
+      "bootstrap": 4,
       "detect": 0,
       "start": 0,
       "probe": 0,
       "runtime": 0,
-      "unknown": 1
+      "unknown": 0
     },
     "failureCategoryCounts": {
-      "unknown": 4
+      "network-cors": 4
     }
   },
   "gates": {
@@ -36,9 +36,12 @@
     "maxFailCount": 6,
     "maxP90DurationMs": 48517,
     "maxStageDropOffCounts": {
+      "bootstrap": 6,
+      "detect": 2,
+      "start": 2,
       "probe": 2,
       "runtime": 2,
-      "unknown": 3
+      "unknown": 2
     }
   }
 }

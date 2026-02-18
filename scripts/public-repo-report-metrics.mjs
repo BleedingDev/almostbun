@@ -31,9 +31,12 @@ export const CATEGORY_RULES = [
     patterns: [
       /cors/i,
       /failed to fetch/i,
+      /network operation failed/i,
+      /fetch failed/i,
       /networkerror/i,
       /econn/i,
       /timeout/i,
+      /timed out/i,
       /proxy/i,
     ],
   },
@@ -56,7 +59,10 @@ export const STAGE_RULES = [
     label: 'Bootstrap',
     patterns: [
       /strict preflight failed/i,
+      /bootstrap\./i,
       /failed to download/i,
+      /retrying github archive download/i,
+      /timed out after \d+ms[\s\S]*downloading/i,
       /archive/i,
       /npm/i,
       /install/i,

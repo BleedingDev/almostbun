@@ -79,6 +79,13 @@ const maxP90DurationMs = Math.max(
   1,
   Math.round(metrics.p90DurationMs * args.p90Multiplier + args.p90SlackMs)
 );
+const normalizedStageSlack = Math.max(0, Math.floor(args.stageSlack));
+const maxStageDropOffCounts = Object.fromEntries(
+  Object.entries(metrics.stageDropOffCounts || {}).map(([stageKey, count]) => [
+    stageKey,
+    Math.max(0, (Number(count) || 0) + normalizedStageSlack),
+  ])
+);
 
 const baseline = {
   version: 1,
@@ -108,11 +115,7 @@ const baseline = {
     minPassRatePct: Number(Math.max(0, metrics.passRatePct - args.passRateTolerancePct).toFixed(2)),
     maxFailCount: Math.max(0, metrics.failCount + Math.max(0, Math.floor(args.failCountDelta))),
     maxP90DurationMs,
-    maxStageDropOffCounts: {
-      probe: Math.max(0, (metrics.stageDropOffCounts.probe || 0) + Math.max(0, Math.floor(args.stageSlack))),
-      runtime: Math.max(0, (metrics.stageDropOffCounts.runtime || 0) + Math.max(0, Math.floor(args.stageSlack))),
-      unknown: Math.max(0, (metrics.stageDropOffCounts.unknown || 0) + Math.max(0, Math.floor(args.stageSlack))),
-    },
+    maxStageDropOffCounts,
   },
 };
 

@@ -69,6 +69,11 @@ describe('public repo quality gates scripts', () => {
       { encoding: 'utf8' }
     );
 
+    const baseline = JSON.parse(fs.readFileSync(baselinePath, 'utf8'));
+    expect(Object.keys(baseline.gates.maxStageDropOffCounts)).toEqual(
+      expect.arrayContaining(['bootstrap', 'detect', 'start', 'probe', 'runtime', 'unknown'])
+    );
+
     const output = execFileSync(
       'node',
       [
