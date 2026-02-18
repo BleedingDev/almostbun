@@ -1,44 +1,44 @@
 {
   "version": 1,
-  "generatedAt": "2026-02-18T16:18:08.784Z",
+  "generatedAt": "2026-02-18T17:19:09.824Z",
   "profile": "full",
-  "label": "full-baseline-capture",
-  "sourceReportPath": "test-results/repo-matrix/full-baseline-capture/report.json",
+  "label": "full-baseline-recalibrated",
+  "sourceReportPath": "test-results/repo-matrix/full-recalibrated/report.json",
   "sourceReport": {
-    "generatedAt": "2026-02-18T15:57:11.533Z",
-    "completedAt": "2026-02-18T16:17:42.336Z",
-    "caseTimeoutMs": 30000,
+    "generatedAt": "2026-02-18T16:25:07.337Z",
+    "completedAt": "2026-02-18T17:18:15.540Z",
+    "caseTimeoutMs": 60000,
     "retries": 1,
-    "shardTotal": 4
+    "shardTotal": 1
   },
   "metrics": {
     "totalCases": 159,
-    "passCount": 6,
-    "failCount": 153,
-    "passRatePct": 3.77,
-    "p50DurationMs": 30002,
-    "p90DurationMs": 30003,
-    "avgDurationMs": 29305,
+    "passCount": 155,
+    "failCount": 4,
+    "passRatePct": 97.48,
+    "p50DurationMs": 15765,
+    "p90DurationMs": 38764,
+    "avgDurationMs": 20052,
     "stageDropOffCounts": {
-      "bootstrap": 73,
+      "bootstrap": 3,
       "detect": 0,
       "start": 0,
       "probe": 0,
       "runtime": 0,
-      "unknown": 80
+      "unknown": 1
     },
     "failureCategoryCounts": {
-      "unknown": 153
+      "unknown": 4
     }
   },
   "gates": {
-    "minPassRatePct": 3.27,
-    "maxFailCount": 155,
-    "maxP90DurationMs": 38003,
+    "minPassRatePct": 96.98,
+    "maxFailCount": 6,
+    "maxP90DurationMs": 48517,
     "maxStageDropOffCounts": {
       "probe": 2,
       "runtime": 2,
-      "unknown": 82
+      "unknown": 3
     }
   }
 }
