@@ -788,6 +788,10 @@ CI runs:
 - Sentinel matrix on PRs and pushes to `main`
 - Full sharded matrix nightly (with merged summary artifact)
 
+Summary artifacts now include:
+- `Business Impact` KPIs (conversion/pass rate, p50/p90 case duration, top blocker cluster)
+- `Functional Funnel` drop-off table (bootstrap -> detect -> start -> probe -> runtime)
+
 ### Fully Shimmed Modules
 
 | Module | Tests | Coverage | Notes |
