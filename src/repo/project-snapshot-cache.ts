@@ -12,7 +12,7 @@ import {
 import type { InstallResult } from '../npm';
 import type { ResolvedPackage } from '../npm/resolver';
 import { parseGitHubRepoUrl } from './github';
-import type { ParsedGitHubRepoUrl } from './github';
+import type { ParsedGitHubRepoUrl, GitHubArchiveSource } from './github';
 
 export type ProjectSnapshotCacheMode = 'default' | 'refresh' | 'bypass';
 
@@ -43,6 +43,8 @@ export interface BootstrapSnapshotCacheableResult {
   extractedFiles: string[];
   installResult?: InstallResult;
   transformedProjectFiles?: number;
+  archiveCacheSource?: GitHubArchiveSource;
+  archiveBytes?: number;
 }
 
 interface SerializedInstallResult {
@@ -57,6 +59,8 @@ interface SerializedBootstrapResult {
   extractedFiles: string[];
   installResult?: SerializedInstallResult;
   transformedProjectFiles?: number;
+  archiveCacheSource?: GitHubArchiveSource;
+  archiveBytes?: number;
 }
 
 interface SerializedProjectSnapshotCacheRecord {
@@ -290,6 +294,8 @@ function serializeRecord(
       extractedFiles: [...result.extractedFiles],
       installResult: serializeInstallResult(result.installResult),
       transformedProjectFiles: result.transformedProjectFiles,
+      archiveCacheSource: result.archiveCacheSource,
+      archiveBytes: result.archiveBytes,
     },
     snapshot: vfs.toSnapshot(),
   };
@@ -305,6 +311,8 @@ function deserializeResult(
     extractedFiles: [...record.result.extractedFiles],
     installResult: deserializeInstallResult(record.result.installResult),
     transformedProjectFiles: record.result.transformedProjectFiles,
+    archiveCacheSource: record.result.archiveCacheSource,
+    archiveBytes: record.result.archiveBytes,
   };
 }
 

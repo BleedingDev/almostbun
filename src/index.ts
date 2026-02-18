@@ -32,13 +32,18 @@ export type {
   ParsedGitHubRepoUrl,
   ImportGitHubRepoOptions,
   ImportGitHubRepoResult,
+  GitHubArchiveSource,
   BootstrapGitHubProjectOptions,
   BootstrapGitHubProjectResult,
+  BootstrapProjectSnapshotSource,
+  BootstrapGitHubProjectCacheStats,
 } from './repo';
 export {
   detectRunnableProject,
   startDetectedProject,
   bootstrapAndRunGitHubProject,
+  resolveRepoRunSloBudgets,
+  evaluateRepoRunSlo,
 } from './repo';
 export type {
   RunnableProjectKind,
@@ -48,6 +53,12 @@ export type {
   RunningProject,
   BootstrapAndRunOptions,
   BootstrapAndRunResult,
+  RepoRunPhaseDurationsMs,
+  RepoRunSloBudgetsMs,
+  RepoRunSloBreach,
+  RepoRunSloStatus,
+  RepoRunCacheObservability,
+  RepoRunObservability,
   RunSpecDeterministicOptions,
   RunSpec,
   CreateRunSpecOptions,

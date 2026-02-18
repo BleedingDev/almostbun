@@ -20,6 +20,8 @@ interface ArchiveCacheEntry {
   size: number;
 }
 
+export type GitHubArchiveSource = 'memory' | 'persistent' | 'network' | 'api-fallback';
+
 type ArchiveCacheLimits = {
   maxEntries: number;
   maxBytes: number;
@@ -54,6 +56,8 @@ export interface ImportGitHubRepoResult {
   rootPath: string;
   projectPath: string;
   extractedFiles: string[];
+  archiveCacheSource?: GitHubArchiveSource;
+  archiveBytes?: number;
 }
 
 function normalizePathLike(value: string): string {
@@ -142,13 +146,18 @@ function cacheArchiveInMemory(
   evictArchiveCacheIfNeeded(limits);
 }
 
-async function getCachedArchive(cacheKey: string): Promise<ArrayBuffer | null> {
+async function getCachedArchive(
+  cacheKey: string
+): Promise<{ archive: ArrayBuffer; source: Extract<GitHubArchiveSource, 'memory' | 'persistent'> } | null> {
   const entry = archiveCache.get(cacheKey);
   if (entry) {
     // LRU-ish behavior: move recently used key to the tail.
     archiveCache.delete(cacheKey);
     archiveCache.set(cacheKey, entry);
-    return cloneArchiveBuffer(entry.archive);
+    return {
+      archive: cloneArchiveBuffer(entry.archive),
+      source: 'memory',
+    };
   }
 
   const limits = getArchiveCacheLimits();
@@ -171,7 +180,10 @@ async function getCachedArchive(cacheKey: string): Promise<ArrayBuffer | null> {
   }
 
   cacheArchiveInMemory(cacheKey, persisted, limits);
-  return cloneArchiveBuffer(new Uint8Array(persisted));
+  return {
+    archive: cloneArchiveBuffer(new Uint8Array(persisted)),
+    source: 'persistent',
+  };
 }
 
 function evictArchiveCacheIfNeeded(limits: ArchiveCacheLimits): void {
@@ -653,7 +665,10 @@ export async function importGitHubRepo(
 
   let response: Response | null = null;
   let directError: unknown;
-  let archiveBuffer = await getCachedArchive(archiveCacheKey);
+  const cachedArchive = await getCachedArchive(archiveCacheKey);
+  let archiveBuffer = cachedArchive?.archive;
+  let archiveSource: GitHubArchiveSource | undefined = cachedArchive?.source;
+
   if (archiveBuffer) {
     options.onProgress?.(`Using cached archive for ${repo.owner}/${repo.repo}@${repo.ref}`);
   } else {
@@ -690,6 +705,7 @@ export async function importGitHubRepo(
 
   if (!archiveBuffer && response?.ok) {
     archiveBuffer = await response.arrayBuffer();
+    archiveSource = 'network';
     await cacheArchive(archiveCacheKey, archiveBuffer);
   }
 
@@ -700,6 +716,7 @@ export async function importGitHubRepo(
       onProgress: options.onProgress,
     });
   } else if (isBrowserRuntime()) {
+    archiveSource = 'api-fallback';
     extractedFiles = await importGitHubRepoViaApi(vfs, repo, destPath, options);
   } else {
     throw new Error(`Failed to download GitHub archive: ${response?.status ?? 'unknown'}`);
@@ -718,5 +735,7 @@ export async function importGitHubRepo(
     rootPath: destPath,
     projectPath,
     extractedFiles,
+    archiveCacheSource: archiveSource,
+    archiveBytes: archiveBuffer?.byteLength,
   };
 }

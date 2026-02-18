@@ -141,6 +141,11 @@ export interface BootstrapAndRunOptions
    * @default warn
    */
   preflightMode?: 'off' | 'warn' | 'strict';
+  /**
+   * Optional SLO budgets (milliseconds) for observability-only reporting.
+   * Runs never fail solely because a budget is exceeded.
+   */
+  performanceBudgetsMs?: Partial<RepoRunSloBudgetsMs>;
 }
 
 export interface BootstrapAndRunResult {
@@ -150,6 +155,7 @@ export interface BootstrapAndRunResult {
   detected: DetectedRunnableProject;
   running: RunningProject;
   trace: RepoRunTraceEvent[];
+  observability?: RepoRunObservability;
 }
 
 export interface RepoRunTraceEvent {
@@ -158,6 +164,44 @@ export interface RepoRunTraceEvent {
   phase: string;
   message: string;
   data?: Record<string, unknown>;
+}
+
+export interface RepoRunPhaseDurationsMs {
+  bootstrapMs: number;
+  preflightMs: number;
+  detectMs: number;
+  startMs: number;
+  totalMs: number;
+}
+
+export interface RepoRunSloBudgetsMs {
+  bootstrapMs: number;
+  startMs: number;
+  totalMs: number;
+}
+
+export interface RepoRunSloBreach {
+  metric: keyof RepoRunSloBudgetsMs;
+  actualMs: number;
+  budgetMs: number;
+}
+
+export interface RepoRunSloStatus {
+  passed: boolean;
+  breaches: RepoRunSloBreach[];
+}
+
+export interface RepoRunCacheObservability {
+  snapshotReadSource: 'none' | 'memory' | 'persistent';
+  snapshotWritten: boolean;
+  archiveSource?: string;
+}
+
+export interface RepoRunObservability {
+  durationsMs: RepoRunPhaseDurationsMs;
+  sloBudgetsMs: RepoRunSloBudgetsMs;
+  slo: RepoRunSloStatus;
+  cache: RepoRunCacheObservability;
 }
 
 interface ModernJsSiblingDistProject {
@@ -195,6 +239,72 @@ const TANSTACK_START_CLIENT_CANDIDATES = [
   'client.jsx',
   'client.js',
 ] as const;
+const DEFAULT_REPO_RUN_SLO_BUDGETS_MS: RepoRunSloBudgetsMs = {
+  bootstrapMs: 120_000,
+  startMs: 30_000,
+  totalMs: 180_000,
+};
+
+function toNonNegativeFiniteInt(value: unknown, fallback: number): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    return fallback;
+  }
+  return Math.max(0, Math.floor(parsed));
+}
+
+export function resolveRepoRunSloBudgets(
+  overrides: Partial<RepoRunSloBudgetsMs> | undefined
+): RepoRunSloBudgetsMs {
+  return {
+    bootstrapMs: toNonNegativeFiniteInt(
+      overrides?.bootstrapMs,
+      DEFAULT_REPO_RUN_SLO_BUDGETS_MS.bootstrapMs
+    ),
+    startMs: toNonNegativeFiniteInt(
+      overrides?.startMs,
+      DEFAULT_REPO_RUN_SLO_BUDGETS_MS.startMs
+    ),
+    totalMs: toNonNegativeFiniteInt(
+      overrides?.totalMs,
+      DEFAULT_REPO_RUN_SLO_BUDGETS_MS.totalMs
+    ),
+  };
+}
+
+export function evaluateRepoRunSlo(
+  durations: RepoRunPhaseDurationsMs,
+  budgets: RepoRunSloBudgetsMs
+): RepoRunSloStatus {
+  const checks: Array<keyof RepoRunSloBudgetsMs> = ['bootstrapMs', 'startMs', 'totalMs'];
+  const breaches: RepoRunSloBreach[] = [];
+  for (const metric of checks) {
+    const actualMs = durations[metric];
+    const budgetMs = budgets[metric];
+    if (actualMs > budgetMs) {
+      breaches.push({
+        metric,
+        actualMs,
+        budgetMs,
+      });
+    }
+  }
+
+  return {
+    passed: breaches.length === 0,
+    breaches,
+  };
+}
+
+function summarizeRepoRunCache(
+  bootstrap: BootstrapGitHubProjectResult
+): RepoRunCacheObservability {
+  return {
+    snapshotReadSource: bootstrap.cache?.snapshotReadSource || 'none',
+    snapshotWritten: bootstrap.cache?.snapshotWritten === true,
+    archiveSource: bootstrap.cache?.archiveSource,
+  };
+}
 
 class StaticFileServer extends DevServer {
   startWatching(): void {
@@ -1666,6 +1776,14 @@ export async function bootstrapAndRunGitHubProject(
 ): Promise<BootstrapAndRunResult> {
   const trace = createTraceCollector(options.onTraceEvent);
   const vfs = new VirtualFS();
+  const runStartedAt = Date.now();
+  const durationsMs: RepoRunPhaseDurationsMs = {
+    bootstrapMs: 0,
+    preflightMs: 0,
+    detectMs: 0,
+    startMs: 0,
+    totalMs: 0,
+  };
   let preflight: RepoPreflightResult = {
     issues: [],
     installOverrides: {},
@@ -1675,22 +1793,32 @@ export async function bootstrapAndRunGitHubProject(
   try {
     trace.emit('bootstrap', 'Starting bootstrap and run flow', { repoUrl });
     trace.emit('bootstrap', 'Initialized virtual filesystem');
+
+    const bootstrapStartedAt = Date.now();
     const bootstrap = await bootstrapGitHubProject(vfs, repoUrl, {
       ...options,
       destPath: options.destPath || '/project',
     });
+    durationsMs.bootstrapMs = Date.now() - bootstrapStartedAt;
+
     trace.emit('bootstrap', 'Repository bootstrap complete', {
       projectPath: bootstrap.projectPath,
       extractedFiles: bootstrap.extractedFiles.length,
       transformedProjectFiles: bootstrap.transformedProjectFiles || 0,
+      archiveSource: bootstrap.cache?.archiveSource,
+      snapshotReadSource: bootstrap.cache?.snapshotReadSource || 'none',
+      snapshotWritten: bootstrap.cache?.snapshotWritten === true,
     });
 
+    const preflightStartedAt = Date.now();
     const preflightMode = options.preflightMode ?? 'warn';
     preflight = preflightMode === 'off'
       ? { issues: [], installOverrides: {}, hasErrors: false }
       : runRepoPreflight(vfs, bootstrap.projectPath, {
         autoFix: false,
       });
+    durationsMs.preflightMs = Date.now() - preflightStartedAt;
+
     if (preflightMode !== 'off') {
       for (const issue of preflight.issues) {
         trace.emit('preflight', issue.message, {
@@ -1712,9 +1840,12 @@ export async function bootstrapAndRunGitHubProject(
       }
     }
 
+    const detectStartedAt = Date.now();
     const detected = detectRunnableProject(vfs, {
       projectPath: bootstrap.projectPath,
     });
+    durationsMs.detectMs = Date.now() - detectStartedAt;
+
     trace.emit('detect', 'Detected runnable project', {
       kind: detected.kind,
       reason: detected.reason,
@@ -1723,6 +1854,7 @@ export async function bootstrapAndRunGitHubProject(
     });
 
     const externalTraceHandler = options.onTraceEvent;
+    const startStartedAt = Date.now();
     const running = await startDetectedProject(vfs, detected, {
       ...options,
       onTraceEvent: (event) => {
@@ -1730,6 +1862,37 @@ export async function bootstrapAndRunGitHubProject(
         externalTraceHandler?.(event);
       },
     });
+    durationsMs.startMs = Date.now() - startStartedAt;
+    durationsMs.totalMs = Date.now() - runStartedAt;
+
+    const sloBudgetsMs = resolveRepoRunSloBudgets(options.performanceBudgetsMs);
+    const slo = evaluateRepoRunSlo(durationsMs, sloBudgetsMs);
+    const cache = summarizeRepoRunCache(bootstrap);
+    const observability: RepoRunObservability = {
+      durationsMs,
+      sloBudgetsMs,
+      slo,
+      cache,
+    };
+
+    trace.emit('metrics', 'Run observability summary', {
+      ...durationsMs,
+      ...cache,
+      sloPassed: slo.passed,
+      sloBreaches: slo.breaches.map((breach) => ({
+        metric: breach.metric,
+        actualMs: breach.actualMs,
+        budgetMs: breach.budgetMs,
+      })),
+    });
+    if (!slo.passed) {
+      options.log?.(
+        `[slo] budget exceeded (${slo.breaches
+          .map((breach) => `${breach.metric}: ${breach.actualMs}ms > ${breach.budgetMs}ms`)
+          .join(', ')})`
+      );
+    }
+
     trace.emit('ready', 'Running project ready', {
       kind: running.kind,
       port: running.port,
@@ -1742,14 +1905,19 @@ export async function bootstrapAndRunGitHubProject(
       detected,
       running,
       trace: trace.events,
+      observability,
     };
   } catch (error) {
     if (error instanceof RepoRunError) {
       throw error;
     }
+    durationsMs.totalMs = Date.now() - runStartedAt;
     const diagnostic = buildRepoFailureDiagnostic({
       error,
       preflightIssues: preflight.issues,
+    });
+    trace.emit('metrics', 'Run failed before completion', {
+      ...durationsMs,
     });
     trace.emit('error', diagnostic.message, {
       code: diagnostic.code,

@@ -4,6 +4,7 @@ import {
   importGitHubRepo,
   ImportGitHubRepoOptions,
   ImportGitHubRepoResult,
+  type GitHubArchiveSource,
 } from './github';
 import { initTransformer, isTransformerReady, transformPackage } from '../transform';
 import {
@@ -65,6 +66,15 @@ export interface BootstrapGitHubProjectOptions
 export interface BootstrapGitHubProjectResult extends ImportGitHubRepoResult {
   installResult?: InstallResult;
   transformedProjectFiles?: number;
+  cache?: BootstrapGitHubProjectCacheStats;
+}
+
+export type BootstrapProjectSnapshotSource = 'none' | 'memory' | 'persistent';
+
+export interface BootstrapGitHubProjectCacheStats {
+  snapshotReadSource: BootstrapProjectSnapshotSource;
+  snapshotWritten: boolean;
+  archiveSource?: GitHubArchiveSource;
 }
 
 /**
@@ -80,7 +90,14 @@ export async function bootstrapGitHubProject(
   const cached = await readBootstrapProjectSnapshotCache(vfs, repoUrl, options);
   if (cached) {
     options.onProgress?.(`Restored project from snapshot cache (${cached.source})`);
-    return cached.result;
+    return {
+      ...cached.result,
+      cache: {
+        snapshotReadSource: cached.source,
+        snapshotWritten: false,
+        archiveSource: cached.result.archiveCacheSource,
+      },
+    };
   }
 
   const importResult = await importGitHubRepo(vfs, repoUrl, {
@@ -161,6 +178,7 @@ export async function bootstrapGitHubProject(
     }
   }
 
+  let snapshotWritten = false;
   try {
     const persisted = await writeBootstrapProjectSnapshotCache(
       vfs,
@@ -168,6 +186,7 @@ export async function bootstrapGitHubProject(
       options,
       finalResult
     );
+    snapshotWritten = persisted;
     if (persisted) {
       options.onProgress?.('Saved project snapshot cache');
     }
@@ -175,5 +194,12 @@ export async function bootstrapGitHubProject(
     options.onProgress?.(`Warning: project snapshot cache write failed: ${error}`);
   }
 
-  return finalResult;
+  return {
+    ...finalResult,
+    cache: {
+      snapshotReadSource: 'none',
+      snapshotWritten,
+      archiveSource: finalResult.archiveCacheSource,
+    },
+  };
 }
