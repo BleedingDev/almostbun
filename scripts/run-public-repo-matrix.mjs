@@ -1,11 +1,41 @@
 #!/usr/bin/env node
 
 import { spawn } from 'node:child_process';
+import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
+const DEFAULT_SENTINEL_CASES_PATH = path.join(SCRIPT_DIR, 'public-repo-sentinel-cases.json');
+
+function parseNameList(raw) {
+  return raw
+    .split(/[,\n]/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function readNamesFromFile(filePath) {
+  const content = fs.readFileSync(filePath, 'utf8');
+  const trimmed = content.trim();
+  if (!trimmed) {
+    return [];
+  }
+  if (trimmed.startsWith('[')) {
+    const parsed = JSON.parse(trimmed);
+    if (!Array.isArray(parsed)) {
+      throw new Error(`Expected array in names file: ${filePath}`);
+    }
+    return parsed.map((item) => String(item).trim()).filter(Boolean);
+  }
+  return parseNameList(content);
+}
 
 function parseArgs(argv) {
   const parsed = {
+    profile: 'full',
     names: '',
+    namesFile: '',
     report: '',
     strictLogs: false,
     shardIndex: '',
@@ -23,8 +53,16 @@ function parseArgs(argv) {
       parsed.captureScreenshots = true;
       continue;
     }
+    if (arg.startsWith('--profile=')) {
+      parsed.profile = arg.slice('--profile='.length).trim() || 'full';
+      continue;
+    }
     if (arg.startsWith('--names=')) {
       parsed.names = arg.slice('--names='.length).trim();
+      continue;
+    }
+    if (arg.startsWith('--names-file=')) {
+      parsed.namesFile = arg.slice('--names-file='.length).trim();
       continue;
     }
     if (arg.startsWith('--report=')) {
@@ -56,6 +94,19 @@ function parseArgs(argv) {
 }
 
 const args = parseArgs(process.argv.slice(2));
+if (!['full', 'sentinel'].includes(args.profile)) {
+  throw new Error(`Unsupported --profile value "${args.profile}". Use "full" or "sentinel".`);
+}
+
+let resolvedNames = args.names;
+if (!resolvedNames && args.namesFile) {
+  const namesPath = path.resolve(process.cwd(), args.namesFile);
+  resolvedNames = readNamesFromFile(namesPath).join(',');
+}
+if (!resolvedNames && args.profile === 'sentinel') {
+  resolvedNames = readNamesFromFile(DEFAULT_SENTINEL_CASES_PATH).join(',');
+}
+
 const reportPath = args.report
   ? path.resolve(process.cwd(), args.report)
   : path.resolve(process.cwd(), 'test-results/public-repo-matrix-report.json');
@@ -64,10 +115,11 @@ const env = {
   ...process.env,
   RUN_PUBLIC_REPO_MATRIX: '1',
   PUBLIC_REPO_MATRIX_REPORT_PATH: reportPath,
+  PUBLIC_REPO_MATRIX_PROFILE: args.profile,
 };
 
-if (args.names) {
-  env.PUBLIC_REPO_MATRIX_NAMES = args.names;
+if (resolvedNames) {
+  env.PUBLIC_REPO_MATRIX_NAMES = resolvedNames;
 }
 if (args.strictLogs) {
   env.PUBLIC_REPO_STRICT_LOG_VALIDATION = '1';

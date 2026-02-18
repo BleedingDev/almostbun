@@ -1,0 +1,14 @@
+[
+  "modern-static-self-built-node",
+  "tanstack-start-basic",
+  "tanstack-start-basic-static",
+  "svelte-vite-plugin-env",
+  "tanstack-with-framer-motion",
+  "nextjs-with-context-api",
+  "nextjs-with-redux",
+  "nextjs-with-typescript",
+  "nextjs-with-react-hook-form",
+  "nextjs-with-static-export",
+  "garfish-app-esm-http-server",
+  "heroku-node-getting-started"
+]

@@ -772,6 +772,22 @@ await npm.install(['react', 'react-dom']);
 
 **967 compatibility tests** verify our Node.js API coverage.
 
+## Public Repo Compatibility Matrix
+
+The repository includes a 159-case public repo matrix that validates bootstrapping and runtime compatibility against real-world projects.
+
+```bash
+# Fast PR gate (~12 representative repos)
+npm run test:public-repos:sentinel
+
+# Full matrix (all cases)
+npm run test:public-repos
+```
+
+CI runs:
+- Sentinel matrix on PRs and pushes to `main`
+- Full sharded matrix nightly (with merged summary artifact)
+
 ### Fully Shimmed Modules
 
 | Module | Tests | Coverage | Notes |

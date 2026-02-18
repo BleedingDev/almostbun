@@ -1,0 +1,170 @@
+name: Public Repo Compatibility Matrix
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'tests/repo-public-compat.test.ts'
+      - 'scripts/run-public-repo-matrix.mjs'
+      - 'scripts/public-repo-sentinel-cases.json'
+      - '.github/workflows/repo-compat-matrix.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'tests/repo-public-compat.test.ts'
+      - 'scripts/run-public-repo-matrix.mjs'
+      - 'scripts/public-repo-sentinel-cases.json'
+      - '.github/workflows/repo-compat-matrix.yml'
+  schedule:
+    - cron: '17 5 * * *'
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Matrix mode
+        required: true
+        default: sentinel
+        type: choice
+        options:
+          - sentinel
+          - full
+      strict_logs:
+        description: Enable strict log validation
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  sentinel:
+    if: >-
+      github.event_name == 'pull_request' ||
+      github.event_name == 'push' ||
+      (github.event_name == 'workflow_dispatch' && inputs.mode != 'full')
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+
+      - name: Run sentinel matrix
+        env:
+          STRICT_LOGS: ${{ github.event_name == 'workflow_dispatch' && inputs.strict_logs || 'false' }}
+        run: |
+          mkdir -p test-results/repo-matrix/sentinel
+          CMD="node scripts/run-public-repo-matrix.mjs --profile=sentinel --report=test-results/repo-matrix/sentinel/report.json --artifacts-dir=test-results/repo-matrix/sentinel/artifacts"
+          if [ "$STRICT_LOGS" = "true" ]; then
+            CMD="$CMD --strict-logs"
+          fi
+          echo "$CMD"
+          eval "$CMD"
+
+      - name: Summarize sentinel matrix
+        run: |
+          node scripts/summarize-public-repo-report.mjs \
+            --input=test-results/repo-matrix/sentinel/report.json \
+            --output=test-results/repo-matrix/sentinel/summary.md \
+            --title="Public Repo Sentinel Matrix"
+
+      - name: Upload sentinel artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: repo-matrix-sentinel
+          path: test-results/repo-matrix/sentinel/
+
+  full_matrix_shards:
+    if: >-
+      github.event_name == 'schedule' ||
+      (github.event_name == 'workflow_dispatch' && inputs.mode == 'full')
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+
+      - name: Run full matrix shard
+        env:
+          STRICT_LOGS: ${{ github.event_name == 'workflow_dispatch' && inputs.strict_logs || 'false' }}
+        run: |
+          mkdir -p test-results/repo-matrix/full/shard-${{ matrix.shard }}
+          CMD="node scripts/run-public-repo-matrix.mjs --profile=full --shard=${{ matrix.shard }}/4 --report=test-results/repo-matrix/full/shard-${{ matrix.shard }}/report.json --artifacts-dir=test-results/repo-matrix/full/shard-${{ matrix.shard }}/artifacts"
+          if [ "$STRICT_LOGS" = "true" ]; then
+            CMD="$CMD --strict-logs"
+          fi
+          echo "$CMD"
+          eval "$CMD"
+
+      - name: Upload full matrix shard artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: repo-matrix-full-shard-${{ matrix.shard }}
+          path: test-results/repo-matrix/full/shard-${{ matrix.shard }}/report.json
+
+  full_matrix_aggregate:
+    if: always() && needs.full_matrix_shards.result != 'skipped'
+    needs: [full_matrix_shards]
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download shard reports
+        uses: actions/download-artifact@v4
+        with:
+          pattern: repo-matrix-full-shard-*
+          merge-multiple: true
+          path: test-results/repo-matrix/full/reports
+
+      - name: Merge full matrix reports
+        run: |
+          node scripts/merge-public-repo-reports.mjs \
+            --inputs-dir=test-results/repo-matrix/full/reports \
+            --output=test-results/repo-matrix/full/report.json
+
+      - name: Summarize full matrix
+        run: |
+          node scripts/summarize-public-repo-report.mjs \
+            --input=test-results/repo-matrix/full/report.json \
+            --output=test-results/repo-matrix/full/summary.md \
+            --title="Public Repo Full Matrix"
+
+      - name: Upload full matrix aggregate artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: repo-matrix-full
+          path: test-results/repo-matrix/full/
