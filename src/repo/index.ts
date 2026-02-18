@@ -37,3 +37,19 @@ export type {
   RepoFailureDiagnostic,
   BuildRepoFailureDiagnosticOptions,
 } from './failure-diagnostics';
+export {
+  createRunSpec,
+  encodeRunSpec,
+  decodeRunSpec,
+  replayRunSpec,
+  getRunSpecLockHashes,
+  extractDeterministicRunOptions,
+  resolveReplayOptions,
+} from './run-spec';
+export type {
+  RunSpecDeterministicOptions,
+  RunSpec,
+  CreateRunSpecOptions,
+  ReplayRunSpecOptions,
+  ReplayRunSpecResult,
+} from './run-spec';

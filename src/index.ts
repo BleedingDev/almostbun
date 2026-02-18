@@ -48,11 +48,23 @@ export type {
   RunningProject,
   BootstrapAndRunOptions,
   BootstrapAndRunResult,
+  RunSpecDeterministicOptions,
+  RunSpec,
+  CreateRunSpecOptions,
+  ReplayRunSpecOptions,
+  ReplayRunSpecResult,
 } from './repo';
 export {
   buildRepoFailureDiagnostic,
   RepoRunError,
   getRepoFailureDiagnostic,
+  createRunSpec,
+  encodeRunSpec,
+  decodeRunSpec,
+  replayRunSpec,
+  getRunSpecLockHashes,
+  extractDeterministicRunOptions,
+  resolveReplayOptions,
 } from './repo';
 export type {
   RepoFailurePhase,
