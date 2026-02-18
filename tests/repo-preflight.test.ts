@@ -153,4 +153,61 @@ describe('repo preflight', () => {
       )
     ).toBe(true);
   });
+
+  it('escalates security-sensitive warnings under strict security policy', () => {
+    const vfs = new VirtualFS();
+    vfs.writeFileSync(
+      '/project/package.json',
+      JSON.stringify({
+        name: 'image-app',
+        dependencies: {
+          sharp: '^0.33.0',
+        },
+      })
+    );
+
+    const result = runRepoPreflight(vfs, '/project', {
+      securityPolicyPreset: 'strict',
+      securityPolicyMode: 'enforce',
+    });
+
+    expect(
+      result.issues.some(
+        issue =>
+          issue.code === 'preflight.native.unsupported' &&
+          issue.severity === 'error'
+      )
+    ).toBe(true);
+    expect(result.hasErrors).toBe(true);
+    expect(result.policy?.preset).toBe('strict');
+    expect((result.policy?.escalationCount || 0) > 0).toBe(true);
+  });
+
+  it('supports report-only security policy mode', () => {
+    const vfs = new VirtualFS();
+    vfs.writeFileSync(
+      '/project/package.json',
+      JSON.stringify({
+        name: 'image-app',
+        dependencies: {
+          sharp: '^0.33.0',
+        },
+      })
+    );
+
+    const result = runRepoPreflight(vfs, '/project', {
+      securityPolicyPreset: 'strict',
+      securityPolicyMode: 'report-only',
+    });
+
+    expect(
+      result.issues.some(
+        issue =>
+          issue.code === 'preflight.native.unsupported' &&
+          issue.severity === 'error'
+      )
+    ).toBe(true);
+    expect(result.hasErrors).toBe(false);
+    expect((result.policy?.suppressedErrorCount || 0) > 0).toBe(true);
+  });
 });

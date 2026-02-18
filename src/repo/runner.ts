@@ -1816,8 +1816,19 @@ export async function bootstrapAndRunGitHubProject(
       ? { issues: [], installOverrides: {}, hasErrors: false }
       : runRepoPreflight(vfs, bootstrap.projectPath, {
         autoFix: false,
+        securityPolicyPreset: options.securityPolicyPreset,
+        securityPolicyMode: options.securityPolicyMode,
+        securityPolicyOverrides: options.securityPolicyOverrides,
       });
     durationsMs.preflightMs = Date.now() - preflightStartedAt;
+    if (preflight.policy) {
+      trace.emit('preflight', 'Applied preflight security policy', {
+        preset: preflight.policy.preset,
+        mode: preflight.policy.mode,
+        escalationCount: preflight.policy.escalationCount,
+        suppressedErrorCount: preflight.policy.suppressedErrorCount,
+      });
+    }
 
     if (preflightMode !== 'off') {
       for (const issue of preflight.issues) {

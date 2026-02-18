@@ -13,6 +13,8 @@ import {
 } from './project-snapshot-cache';
 import type { ProjectSnapshotCacheMode } from './project-snapshot-cache';
 import { runRepoPreflight } from './preflight';
+import type { PreflightSeverity } from './preflight';
+import type { RepoSecurityPolicyMode, RepoSecurityPolicyPreset } from './security-policy';
 
 export interface BootstrapGitHubProjectOptions
   extends ImportGitHubRepoOptions,
@@ -61,6 +63,22 @@ export interface BootstrapGitHubProjectOptions
    * Default: 256 MiB
    */
   projectSnapshotCacheMaxEntryBytes?: number;
+  /**
+   * Security policy preset applied to preflight findings.
+   * Default: 'compat'
+   */
+  securityPolicyPreset?: RepoSecurityPolicyPreset;
+  /**
+   * Security policy mode.
+   * - enforce: escalated severities affect hasErrors (default)
+   * - report-only: escalations are reported but do not block
+   * Default: 'enforce'
+   */
+  securityPolicyMode?: RepoSecurityPolicyMode;
+  /**
+   * Optional per-issue severity overrides for security policy escalation.
+   */
+  securityPolicyOverrides?: Record<string, PreflightSeverity>;
 }
 
 export interface BootstrapGitHubProjectResult extends ImportGitHubRepoResult {
@@ -118,6 +136,9 @@ export async function bootstrapGitHubProject(
         autoFix: true,
         includeWorkspaces: options.includeWorkspaces,
         preferPublishedWorkspacePackages: options.preferPublishedWorkspacePackages,
+        securityPolicyPreset: options.securityPolicyPreset,
+        securityPolicyMode: options.securityPolicyMode,
+        securityPolicyOverrides: options.securityPolicyOverrides,
         onProgress: options.onProgress,
       });
       for (const issue of preInstallPreflight.issues) {
@@ -140,6 +161,9 @@ export async function bootstrapGitHubProject(
 
       const postInstallPreflight = runRepoPreflight(vfs, importResult.projectPath, {
         autoFix: false,
+        securityPolicyPreset: options.securityPolicyPreset,
+        securityPolicyMode: options.securityPolicyMode,
+        securityPolicyOverrides: options.securityPolicyOverrides,
       });
       for (const issue of postInstallPreflight.issues) {
         options.onProgress?.(

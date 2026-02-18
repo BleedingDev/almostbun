@@ -6,6 +6,11 @@ import {
   type BootstrapAndRunResult,
   type RunnableProjectKind,
 } from './runner';
+import type {
+  RepoSecurityPolicyMode,
+  RepoSecurityPolicyPreset,
+  RepoSecurityPolicySeverity,
+} from './security-policy';
 
 export interface RunSpecDeterministicOptions {
   includeDev: boolean;
@@ -15,6 +20,9 @@ export interface RunSpecDeterministicOptions {
   preferPublishedWorkspacePackages: boolean;
   transformProjectSources: boolean;
   preflightMode: 'off' | 'warn' | 'strict';
+  securityPolicyPreset: RepoSecurityPolicyPreset;
+  securityPolicyMode: RepoSecurityPolicyMode;
+  securityPolicyOverrides?: Record<string, RepoSecurityPolicySeverity>;
   serverReadyTimeoutMs?: number;
   disableViteHmrInjection: boolean;
 }
@@ -117,6 +125,11 @@ export function extractDeterministicRunOptions(
     preferPublishedWorkspacePackages: !!options?.preferPublishedWorkspacePackages,
     transformProjectSources: options?.transformProjectSources !== false,
     preflightMode: options?.preflightMode ?? 'warn',
+    securityPolicyPreset: options?.securityPolicyPreset ?? 'compat',
+    securityPolicyMode: options?.securityPolicyMode ?? 'enforce',
+    securityPolicyOverrides: options?.securityPolicyOverrides
+      ? { ...options.securityPolicyOverrides }
+      : undefined,
     serverReadyTimeoutMs: options?.serverReadyTimeoutMs,
     disableViteHmrInjection: !!options?.disableViteHmrInjection,
   };
@@ -171,6 +184,12 @@ export function resolveReplayOptions(
     transformProjectSources:
       overrides.transformProjectSources ?? deterministic.transformProjectSources,
     preflightMode: overrides.preflightMode ?? deterministic.preflightMode,
+    securityPolicyPreset:
+      overrides.securityPolicyPreset ?? deterministic.securityPolicyPreset,
+    securityPolicyMode:
+      overrides.securityPolicyMode ?? deterministic.securityPolicyMode,
+    securityPolicyOverrides:
+      overrides.securityPolicyOverrides ?? deterministic.securityPolicyOverrides,
     serverReadyTimeoutMs: overrides.serverReadyTimeoutMs ?? deterministic.serverReadyTimeoutMs,
     disableViteHmrInjection:
       overrides.disableViteHmrInjection ?? deterministic.disableViteHmrInjection,

@@ -79,6 +79,8 @@ describe('run spec', () => {
     expect(deterministic.includeWorkspaces).toBe(true);
     expect(deterministic.preferLockfile).toBe(true);
     expect(deterministic.preflightMode).toBe('warn');
+    expect(deterministic.securityPolicyPreset).toBe('compat');
+    expect(deterministic.securityPolicyMode).toBe('enforce');
   });
 
   it('replays spec and validates lock reproducibility', async () => {

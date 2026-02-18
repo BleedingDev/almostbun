@@ -1,6 +1,14 @@
 import * as path from '../shims/path';
 import { VirtualFS } from '../virtual-fs';
 import { getNativePackageSupport } from '../native-fallbacks';
+import {
+  applyRepoSecurityPolicy,
+  resolveRepoSecurityPolicyMode,
+  resolveRepoSecurityPolicyPreset,
+  type RepoSecurityPolicyEvaluation,
+  type RepoSecurityPolicyMode,
+  type RepoSecurityPolicyPreset,
+} from './security-policy';
 
 type PackageJsonLike = {
   name?: string;
@@ -31,12 +39,16 @@ export interface RepoPreflightOptions {
   includeWorkspaces?: boolean;
   preferPublishedWorkspacePackages?: boolean;
   onProgress?: (message: string) => void;
+  securityPolicyPreset?: RepoSecurityPolicyPreset;
+  securityPolicyMode?: RepoSecurityPolicyMode;
+  securityPolicyOverrides?: Record<string, PreflightSeverity>;
 }
 
 export interface RepoPreflightResult {
   issues: PreflightIssue[];
   installOverrides: PreflightInstallOverrides;
   hasErrors: boolean;
+  policy?: RepoSecurityPolicyEvaluation;
 }
 
 const IMPORT_SPECIFIER_PATTERN =
@@ -46,6 +58,17 @@ const EFFECT_SUBPATHS = new Set([
   '@modern-js/plugin-bff/effect-client',
   '@modern-js/plugin-bff/effect-server',
 ]);
+
+function getRuntimeEnvValue(name: string): string | undefined {
+  try {
+    const runtimeProcess = (globalThis as typeof globalThis & {
+      process?: { env?: Record<string, string | undefined> };
+    }).process;
+    return runtimeProcess?.env?.[name];
+  } catch {
+    return undefined;
+  }
+}
 
 function normalizePathLike(input: string): string {
   return input.replace(/\\/g, '/');
@@ -217,6 +240,22 @@ function hasExportForSubpath(exportsField: PackageJsonLike['exports'], subPath: 
   return false;
 }
 
+function resolvePreflightPolicyOptions(options: RepoPreflightOptions): {
+  preset: RepoSecurityPolicyPreset;
+  mode: RepoSecurityPolicyMode;
+  overrides?: Record<string, PreflightSeverity>;
+} {
+  return {
+    preset: resolveRepoSecurityPolicyPreset(
+      options.securityPolicyPreset || getRuntimeEnvValue('ALMOSTBUN_REPO_SECURITY_POLICY_PRESET')
+    ),
+    mode: resolveRepoSecurityPolicyMode(
+      options.securityPolicyMode || getRuntimeEnvValue('ALMOSTBUN_REPO_SECURITY_POLICY_MODE')
+    ),
+    overrides: options.securityPolicyOverrides,
+  };
+}
+
 export function runRepoPreflight(
   vfs: VirtualFS,
   projectPath: string,
@@ -225,20 +264,26 @@ export function runRepoPreflight(
   const normalizedProjectPath = normalizePathLike(projectPath);
   const issues: PreflightIssue[] = [];
   const installOverrides: PreflightInstallOverrides = {};
+  const policyOptions = resolvePreflightPolicyOptions(options);
   const pkg = readPackageJson(vfs, normalizedProjectPath);
 
   if (!pkg) {
-    return {
-      issues: [
+    const appliedPolicy = applyRepoSecurityPolicy(
+      [
         {
           code: 'preflight.package-json.missing',
-          severity: 'warning',
+          severity: 'warning' as const,
           message: `No package.json found at ${normalizedProjectPath}; dependency preflight skipped`,
           path: path.posix.join(normalizedProjectPath, 'package.json'),
         },
       ],
+      policyOptions
+    );
+    return {
+      issues: appliedPolicy.issues,
       installOverrides,
-      hasErrors: false,
+      hasErrors: appliedPolicy.hasErrors,
+      policy: appliedPolicy.policy,
     };
   }
 
@@ -351,9 +396,22 @@ export function runRepoPreflight(
     }
   }
 
+  const appliedPolicy = applyRepoSecurityPolicy(issues, policyOptions);
+  if (appliedPolicy.policy.escalationCount > 0) {
+    options.onProgress?.(
+      `Preflight security policy (${appliedPolicy.policy.preset}/${appliedPolicy.policy.mode}) escalated ${appliedPolicy.policy.escalationCount} issue(s)`
+    );
+  }
+  if (appliedPolicy.policy.suppressedErrorCount > 0) {
+    options.onProgress?.(
+      `Preflight security policy report-only suppressed ${appliedPolicy.policy.suppressedErrorCount} escalated error(s)`
+    );
+  }
+
   return {
-    issues,
+    issues: appliedPolicy.issues,
     installOverrides,
-    hasErrors: issues.some((issue) => issue.severity === 'error'),
+    hasErrors: appliedPolicy.hasErrors,
+    policy: appliedPolicy.policy,
   };
 }

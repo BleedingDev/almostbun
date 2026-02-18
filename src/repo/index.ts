@@ -49,6 +49,19 @@ export type {
   BuildRepoFailureDiagnosticOptions,
 } from './failure-diagnostics';
 export {
+  applyRepoSecurityPolicy,
+  resolveRepoSecurityPolicyPreset,
+  resolveRepoSecurityPolicyMode,
+} from './security-policy';
+export type {
+  RepoSecurityPolicyPreset,
+  RepoSecurityPolicyMode,
+  RepoSecurityPolicySeverity,
+  RepoSecurityPolicyOptions,
+  RepoSecurityPolicyEscalation,
+  RepoSecurityPolicyEvaluation,
+} from './security-policy';
+export {
   createRunSpec,
   encodeRunSpec,
   decodeRunSpec,

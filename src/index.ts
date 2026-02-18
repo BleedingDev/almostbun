@@ -69,6 +69,9 @@ export {
   buildRepoFailureDiagnostic,
   RepoRunError,
   getRepoFailureDiagnostic,
+  applyRepoSecurityPolicy,
+  resolveRepoSecurityPolicyPreset,
+  resolveRepoSecurityPolicyMode,
   createRunSpec,
   encodeRunSpec,
   decodeRunSpec,
@@ -82,6 +85,12 @@ export type {
   RepoFailureHint,
   RepoFailureDiagnostic,
   BuildRepoFailureDiagnosticOptions,
+  RepoSecurityPolicyPreset,
+  RepoSecurityPolicyMode,
+  RepoSecurityPolicySeverity,
+  RepoSecurityPolicyOptions,
+  RepoSecurityPolicyEscalation,
+  RepoSecurityPolicyEvaluation,
 } from './repo';
 export { ServerBridge, getServerBridge, resetServerBridge } from './server-bridge';
 export type { InitServiceWorkerOptions } from './server-bridge';
