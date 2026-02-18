@@ -787,10 +787,32 @@ npm run test:public-repos
 CI runs:
 - Sentinel matrix on PRs and pushes to `main`
 - Full sharded matrix nightly (with merged summary artifact)
+- Full matrix quality gates (pass-rate, fail-count, p90 latency, funnel drop-offs) against `config/repo-matrix/full-baseline.json`
+
+Current full-matrix gate profile (for deterministic runtime):
+- `PUBLIC_REPO_CASE_TIMEOUT_MS=30000`
+- `PUBLIC_REPO_CASE_RETRIES=1`
+- `PUBLIC_REPO_CASE_RETRY_DELAY_MS=0`
+- `PUBLIC_REPO_CRAWL_LINKS_LIMIT=2`
 
 Summary artifacts now include:
 - `Business Impact` KPIs (conversion/pass rate, p50/p90 case duration, top blocker cluster)
 - `Functional Funnel` drop-off table (bootstrap -> detect -> start -> probe -> runtime)
+
+Baseline and gates:
+```bash
+# Create/update baseline JSON from a full matrix report
+npm run report:public-repos:baseline -- \
+  --input=test-results/repo-matrix/full/report.json \
+  --output=config/repo-matrix/full-baseline.json \
+  --profile=full
+
+# Evaluate quality gates against baseline
+npm run check:public-repos:gates -- \
+  --input=test-results/repo-matrix/full/report.json \
+  --baseline=config/repo-matrix/full-baseline.json \
+  --output=test-results/repo-matrix/full/gates.md
+```
 
 ### Fully Shimmed Modules
 

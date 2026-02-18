@@ -8,14 +8,26 @@ on:
       - 'tests/repo-public-compat.test.ts'
       - 'scripts/run-public-repo-matrix.mjs'
       - 'scripts/public-repo-sentinel-cases.json'
+      - 'scripts/summarize-public-repo-report.mjs'
+      - 'scripts/public-repo-report-metrics.mjs'
+      - 'scripts/extract-public-repo-baseline.mjs'
+      - 'scripts/check-public-repo-quality-gates.mjs'
+      - 'config/repo-matrix/**'
       - '.github/workflows/repo-compat-matrix.yml'
   push:
     branches: [main]
     paths:
       - 'src/**'
       - 'tests/repo-public-compat.test.ts'
+      - 'tests/public-repo-report-summary.test.ts'
+      - 'tests/public-repo-quality-gates.test.ts'
       - 'scripts/run-public-repo-matrix.mjs'
       - 'scripts/public-repo-sentinel-cases.json'
+      - 'scripts/summarize-public-repo-report.mjs'
+      - 'scripts/public-repo-report-metrics.mjs'
+      - 'scripts/extract-public-repo-baseline.mjs'
+      - 'scripts/check-public-repo-quality-gates.mjs'
+      - 'config/repo-matrix/**'
       - '.github/workflows/repo-compat-matrix.yml'
   schedule:
     - cron: '17 5 * * *'
@@ -117,6 +129,10 @@ jobs:
       - name: Run full matrix shard
         env:
           STRICT_LOGS: ${{ github.event_name == 'workflow_dispatch' && inputs.strict_logs || 'false' }}
+          PUBLIC_REPO_CASE_TIMEOUT_MS: '30000'
+          PUBLIC_REPO_CASE_RETRIES: '1'
+          PUBLIC_REPO_CASE_RETRY_DELAY_MS: '0'
+          PUBLIC_REPO_CRAWL_LINKS_LIMIT: '2'
         run: |
           mkdir -p test-results/repo-matrix/full/shard-${{ matrix.shard }}
           CMD="node scripts/run-public-repo-matrix.mjs --profile=full --shard=${{ matrix.shard }}/4 --report=test-results/repo-matrix/full/shard-${{ matrix.shard }}/report.json --artifacts-dir=test-results/repo-matrix/full/shard-${{ matrix.shard }}/artifacts"
@@ -161,6 +177,13 @@ jobs:
             --input=test-results/repo-matrix/full/report.json \
             --output=test-results/repo-matrix/full/summary.md \
             --title="Public Repo Full Matrix"
+
+      - name: Enforce full matrix quality gates
+        run: |
+          node scripts/check-public-repo-quality-gates.mjs \
+            --input=test-results/repo-matrix/full/report.json \
+            --baseline=config/repo-matrix/full-baseline.json \
+            --output=test-results/repo-matrix/full/gates.md
 
       - name: Upload full matrix aggregate artifacts
         if: always()

@@ -78,6 +78,8 @@
     "test:run": "vitest run",
     "test:public-repos": "node ./scripts/run-public-repo-matrix.mjs --profile=full",
     "test:public-repos:sentinel": "node ./scripts/run-public-repo-matrix.mjs --profile=sentinel",
+    "report:public-repos:baseline": "node ./scripts/extract-public-repo-baseline.mjs",
+    "check:public-repos:gates": "node ./scripts/check-public-repo-quality-gates.mjs",
     "test:bun-parity": "RUN_BUN_CLI_PARITY=1 vitest run tests/bun-cli-parity.test.ts",
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",
